@@ -34,6 +34,8 @@ def list_files(startpath):
 
 
 def parse(filepath):
+    if not isinstance(filepath, Path):
+        filepath = Path(filepath)
     tmp_root = Path('./tmp')
     if not tmp_root.exists():
         tmp_root.mkdir(parents=True)
