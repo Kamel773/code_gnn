@@ -35,18 +35,17 @@ class MyGIN(nn.Module):
     """
     Adapted from pytorch_geometric/benchmark/kernel/gin.py
     """
-    def __init__(self):
+    def __init__(self, dataset, num_layers, hidden_features):
         super().__init__()
-        self.conv1 = GINConv(MyGIN.MLP(3, 64), train_eps=True)
         self.convs = torch.nn.ModuleList()
-        for i in range(5-1):
-            self.convs.append(GINConv(MyGIN.MLP(64, 64), train_eps=True))
+        self.convs.append(GINConv(MyGIN.MLP(dataset.num_node_features, hidden_features), train_eps=True))
+        for i in range(num_layers-1):
+            self.convs.append(GINConv(MyGIN.MLP(hidden_features, hidden_features), train_eps=True))
         self.jump = JumpingKnowledge('cat')
-        self.lin1 = Linear(5 * 64, 64)
-        self.lin2 = Linear(64, 2)
+        self.lin1 = Linear(num_layers * hidden_features, hidden_features)
+        self.lin2 = Linear(hidden_features, dataset.num_classes)
 
     def reset_parameters(self):
-        self.conv1.reset_parameters()
         for conv in self.convs:
             conv.reset_parameters()
         self.jump.reset_parameters()
@@ -54,17 +53,17 @@ class MyGIN(nn.Module):
         self.lin2.reset_parameters()
 
     def forward(self, x, edge_index, batch):
-        x = self.conv1(x, edge_index)
-        xs = [x]
+        layer_hs = []
+        node_h = x
         for conv in self.convs:
-            x = conv(x, edge_index)
-            xs += [x]
-        x = self.jump(xs)
-        x = global_mean_pool(x, batch)
-        x = F.relu(self.lin1(x))
-        x = F.dropout(x, p=0.5, training=self.training)
-        x = self.lin2(x)
-        return x
+            node_h = conv(node_h, edge_index)
+            layer_hs.append(node_h)
+        h_concat = self.jump(layer_hs)  # JumpingKnowledge('cat') just concatenates node features from all layers
+        graph_h = global_mean_pool(h_concat, batch)  # Readout from each graph in the batch
+        graph_h = F.relu(self.lin1(graph_h))
+        graph_h = F.dropout(graph_h, p=0.5, training=self.training)
+        graph_h = self.lin2(graph_h)
+        return graph_h
 
     @staticmethod
     def MLP(in_features, hidden):
@@ -108,7 +107,7 @@ def main():
     train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=32)
 
-    model = MyGIN().to(device)
+    model = MyGIN(dataset, num_layers=5, hidden_features=64).to(device)
     model.reset_parameters()
     print(list((p.shape for p in model.parameters())))
     # I'm finding that the GIN model does not handle pyg minibatches
