@@ -93,6 +93,35 @@ def measure_performance(model, device, test_loader):
         return acc
 
 
+def test_agg_concat():
+    """
+    pyg's GIN implementation uses concat(agg(h)) while the GIN paper uses sum(agg(h)).
+    I guess the implementation assumes they're equal.
+    I was having suspicion that this is not correct, so this function calculates both and asserts they're equal.
+    """
+
+    dataset = TUDataset(root='D:/datasets/TUDataset', name='PROTEINS')
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    for data in loader:
+        x, batch = data.x, data.batch
+        h1 = torch.randn((len(x), 64))
+        h2 = torch.randn((len(x), 64))
+        h3 = torch.randn((len(x), 64))
+
+        # agg(concat(h_i for h_i in h))
+        h_cat = torch.cat((h1, h2, h3), dim=1)
+        h_cat_pool = global_mean_pool(h_cat, batch)
+
+        # concat(agg(h_i) for h_i in h)
+        h1_pool = global_mean_pool(h1, batch)
+        h2_pool = global_mean_pool(h2, batch)
+        h3_pool = global_mean_pool(h3, batch)
+        h_pool_cat = torch.cat((h1_pool, h2_pool, h3_pool), dim=1)
+
+        assert torch.equal(h_cat_pool, h_pool_cat), 'concat/agg are not commutative??'
+
+
 def main():
     np.random.seed(0)
     torch.random.manual_seed(0)
@@ -106,6 +135,8 @@ def main():
     train_set, test_set = random_split(dataset, splits)
     train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
     test_loader = DataLoader(test_set, batch_size=32)
+
+    data = next(iter(train_loader))
 
     model = MyGIN(dataset, num_layers=5, hidden_features=64).to(device)
     model.reset_parameters()
