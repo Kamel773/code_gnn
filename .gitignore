@@ -3,6 +3,10 @@ joern
 old-joern
 tmp
 out
-pytorch_geometric
-runs
-saved_runs
+/pytorch_geometric/
+/runs/
+/saved_runs/
+/saved_runs_archive/
+/powerful-gnns/
+/CodeXGLUE-Defect-detection/dataset/*
+!/CodeXGLUE-Defect-detection/dataset/preprocess.py
