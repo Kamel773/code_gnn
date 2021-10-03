@@ -19,6 +19,7 @@ from matplotlib import pyplot as plt
 import itertools
 
 from pytorch_geometric.benchmark.kernel.gin import GINWithJK
+from pytorch_geometric.torch_geometric.transforms import Constant
 
 
 def draw_9_plots(dataset):
@@ -52,6 +53,7 @@ class MyGIN(nn.Module):
         self.jump = JumpingKnowledge('cat')
         self.lin1 = Linear(num_layers * hidden_features, hidden_features)
         self.lin2 = Linear(hidden_features, dataset.num_classes)
+        self.bn = BatchNorm1d(hidden_features)
 
     def reset_parameters(self):
         for conv in self.convs:
@@ -67,8 +69,10 @@ class MyGIN(nn.Module):
             x = conv(x, edge_index)
             xs.append(x)
         x = self.jump(xs)  # JumpingKnowledge('cat') just concatenates node features from all layers
-        x = global_mean_pool(x, batch)  # Readout from each graph in the batch
-        x = F.relu(self.lin1(x))
+        x = global_add_pool(x, batch)  # Readout from each graph in the batch
+        x = self.lin1(x)
+        x = self.bn(x)
+        x = F.relu(x)
         x = F.dropout(x, p=0.5, training=self.training)
         x = self.lin2(x)
         return F.log_softmax(x, dim=-1)
@@ -77,10 +81,10 @@ class MyGIN(nn.Module):
     def MLP(in_features, hidden):
         return Sequential(
             Linear(in_features, hidden),
+            BatchNorm1d(hidden),
             ReLU(),
             Linear(hidden, hidden),
             ReLU(),
-            BatchNorm1d(hidden),
         )
 
 
@@ -138,7 +142,7 @@ def main():
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
-    dataset = TUDataset(root='D:/datasets/TUDataset', name='PROTEINS')
+    dataset = TUDataset(root='D:/datasets/TUDataset', name='MUTAG')
 
     device = torch.device('cuda')
 
