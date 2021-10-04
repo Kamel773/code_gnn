@@ -182,7 +182,10 @@ def train(args, train_dataset, model, tokenizer):
             inputs = batch[0].to(args.device)
             labels = batch[1].to(args.device)
             model.train()
-            loss, logits = model(inputs, labels)
+            if args.output_hidden_states:
+                loss, logits, _ = model(inputs, labels)
+            else:
+                loss, logits = model(inputs, labels)
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
             loss.backward()
@@ -254,7 +257,10 @@ def evaluate(args, model, tokenizer, eval_when_training=False):
         inputs = batch[0].to(args.device)
         label = batch[1].to(args.device)
         with torch.no_grad():
-            lm_loss, logit = model(inputs, label)
+            if args.output_hidden_states:
+                lm_loss, logit, _ = model(inputs, labels)
+            else:
+                lm_loss, logit = model(inputs, labels)
             eval_loss += lm_loss.mean().item()
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
@@ -299,7 +305,10 @@ def test(args, model, tokenizer):
         inputs = batch[0].to(args.device)
         label = batch[1].to(args.device)
         with torch.no_grad():
-            logit = model(inputs)
+            if args.output_hidden_states:
+                logit, _ = model(inputs, labels)
+            else:
+                logit = model(inputs, labels)
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
 
@@ -399,6 +408,8 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
+    parser.add_argument('--output_hidden_states', action='store_true',
+                        help="Output the hidden states of the model.")
 
     args = parser.parse_args()
 
@@ -491,7 +502,8 @@ def get_model(args):
         model = model_class.from_pretrained(args.model_name_or_path,
                                             from_tf=bool('.ckpt' in args.model_name_or_path),
                                             config=config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None)
+                                            cache_dir=args.cache_dir if args.cache_dir else None,
+                                            output_hidden_states=args.output_hidden_states)
     else:
         model = model_class(config)
     model = Model(model, config, tokenizer, args)
