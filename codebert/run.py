@@ -183,7 +183,7 @@ def train(args, train_dataset, model, tokenizer):
             labels = batch[1].to(args.device)
             model.train()
             if args.output_hidden_states:
-                loss, logits, _ = model(inputs, labels)
+                loss, logits, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
             else:
                 loss, logits = model(inputs, labels)
             if args.n_gpu > 1:
@@ -258,7 +258,7 @@ def evaluate(args, model, tokenizer, eval_when_training=False):
         label = batch[1].to(args.device)
         with torch.no_grad():
             if args.output_hidden_states:
-                lm_loss, logit, _ = model(inputs, labels)
+                lm_loss, logit, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
             else:
                 lm_loss, logit = model(inputs, labels)
             eval_loss += lm_loss.mean().item()
@@ -306,7 +306,7 @@ def test(args, model, tokenizer):
         label = batch[1].to(args.device)
         with torch.no_grad():
             if args.output_hidden_states:
-                logit, _ = model(inputs, labels)
+                logit, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
             else:
                 logit = model(inputs, labels)
             logits.append(logit.cpu().numpy())
@@ -323,7 +323,7 @@ def test(args, model, tokenizer):
                 f.write(example.idx + '\t0\n')
 
 
-def main():
+def parse_args(raw_args=None):
     parser = argparse.ArgumentParser()
 
     ## Required parameters
@@ -411,7 +411,11 @@ def main():
     parser.add_argument('--output_hidden_states', action='store_true',
                         help="Output the hidden states of the model.")
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
+    return args
+
+def main(raw_args=None):
+    args = parse_args(raw_args)
 
     # Setup distant debugging if needed
     if args.server_ip and args.server_port:
@@ -502,8 +506,7 @@ def get_model(args):
         model = model_class.from_pretrained(args.model_name_or_path,
                                             from_tf=bool('.ckpt' in args.model_name_or_path),
                                             config=config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None,
-                                            output_hidden_states=args.output_hidden_states)
+                                            cache_dir=args.cache_dir if args.cache_dir else None)
     else:
         model = model_class(config)
     model = Model(model, config, tokenizer, args)
