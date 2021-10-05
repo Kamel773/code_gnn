@@ -1,6 +1,7 @@
 import os
 import random
 import shutil
+from collections import defaultdict
 
 import numpy as np
 import torch
@@ -10,6 +11,7 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import random_split
 from torch.utils.tensorboard import SummaryWriter
+from torch_geometric.data import HeteroData, InMemoryDataset
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GINConv, JumpingKnowledge, global_mean_pool, global_add_pool
@@ -19,6 +21,7 @@ from matplotlib import pyplot as plt
 import itertools
 
 from codebert.api import CodeBERTAPI
+from cpg import parse
 from pytorch_geometric.benchmark.kernel.gin import GINWithJK
 from pytorch_geometric.torch_geometric.transforms import Constant
 
@@ -139,20 +142,73 @@ def test_agg_concat():
         assert torch.equal(h_cat_pool, h_pool_cat), 'concat/agg are not commutative??'
 
 
-def get_dataset(codebert):
-    dataset = TUDataset(root='D:/datasets/TUDataset', name='MUTAG')
-    return dataset
+
+def get_codebert_embedding(file, cpg, codebert_api):
+    # TODO: standardize the text whitespace so that there is just one space in between each token.
+    #  Do the same for cpg so that the offsets match.
+    with open(file) as f:
+        text = f.read()
+    examples = [
+        {
+            "func": text,
+            "idx": 0,
+            "target": 0,
+        }
+    ]
+    token_embeddings, features = codebert_api.get_token_embeddings(examples, return_features=True)
+    # TODO: Map cpg nodes to features given the offsets in features[0].encoded.offsets
+
+    # TODO: This is a default random initialization to make the static analysis happy
+    embedding = torch.randn((len(cpg.nodes), codebert_api.num_features))
+
+    return embedding
+
+
+def get_dataset(use_codebert=False):
+    # Read data into huge `Data` list.
+    if use_codebert:
+        codebert_api = CodeBERTAPI()
+    else:
+        codebert_api = None
+    code_files = ["test.c", 'x42/c/X42.c']
+    data_list = []
+    for code in code_files:
+        cpg = parse(code)
+
+        data = HeteroData()
+
+        num_features_edge = 128
+
+        if use_codebert:
+            data['node'].x = get_codebert_embedding(code, cpg, codebert_api)
+        else:
+            num_features_node = 128
+            data['node'].x = torch.randn((len(cpg.nodes), num_features_node))
+        edges_by_type = defaultdict(list)
+        for u, v, t in cpg.edges.data("type"):
+            edges_by_type[t].append((u, v))
+        for t, edges in edges_by_type.items():
+            edge_data = data['node', t, 'node']
+            edge_data.edge_index = torch.tensor(edges)
+            edge_data.edge_attr = torch.randn((len(edges), num_features_edge))
+        data_list.append(data)
+
+    data = data_list[0]
+    print(data)
+    print(data.metadata())
+    print(data.x_dict)
+    print(data.edge_index_dict)
+    return data_list
 
 
 def main():
-    codebert = CodeBERTAPI()
-
     seed = 0
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = get_dataset(codebert)
+    # dataset = get_dataset(use_codebert=False)
+    dataset = get_dataset(use_codebert=True)
 
     device = torch.device('cuda')
 
