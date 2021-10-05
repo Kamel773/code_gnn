@@ -18,11 +18,13 @@ import networkx as nx
 from matplotlib import pyplot as plt
 import itertools
 
+from codebert.api import CodeBERTAPI
 from pytorch_geometric.benchmark.kernel.gin import GINWithJK
 from pytorch_geometric.torch_geometric.transforms import Constant
 
 
 def draw_9_plots(dataset):
+    """Draw plots of graphs from the PROTEINS dataset."""
     fig, axes = plt.subplots(nrows=3, ncols=3)
     ax = axes.flatten()
     dataset_sample = list(itertools.islice((d for d in dataset if d.y[0].item() == 0), 4)) + list(
@@ -137,12 +139,20 @@ def test_agg_concat():
         assert torch.equal(h_cat_pool, h_pool_cat), 'concat/agg are not commutative??'
 
 
+def get_dataset(codebert):
+    dataset = TUDataset(root='D:/datasets/TUDataset', name='MUTAG')
+    return dataset
+
+
 def main():
+    codebert = CodeBERTAPI()
+
     seed = 0
     random.seed(seed)
     np.random.seed(seed)
     torch.random.manual_seed(seed)
-    dataset = TUDataset(root='D:/datasets/TUDataset', name='MUTAG')
+
+    dataset = get_dataset(codebert)
 
     device = torch.device('cuda')
 

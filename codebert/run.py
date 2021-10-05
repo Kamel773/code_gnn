@@ -42,7 +42,7 @@ except:
 
 from tqdm import tqdm
 import multiprocessing
-from model import Model
+from codebert.model import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (AdamW, get_linear_schedule_with_warmup,
@@ -299,7 +299,7 @@ def test(args, model, tokenizer):
         inputs = batch[0].to(args.device)
         label = batch[1].to(args.device)
         with torch.no_grad():
-            logit = model(inputs)
+            lm_loss, logit = model(inputs, label)
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
 
@@ -314,7 +314,7 @@ def test(args, model, tokenizer):
                 f.write(example.idx + '\t0\n')
 
 
-def main():
+def parse_args(raw_args=None):
     parser = argparse.ArgumentParser()
 
     ## Required parameters
@@ -400,7 +400,7 @@ def main():
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
 
     # Setup distant debugging if needed
     if args.server_ip and args.server_port:
@@ -420,13 +420,19 @@ def main():
     args.device = device
     args.per_gpu_train_batch_size = args.train_batch_size // args.n_gpu
     args.per_gpu_eval_batch_size = args.eval_batch_size // args.n_gpu
+
+    # Set seed
+    set_seed(args.seed)
+
+    return args
+
+def main(raw_args=None):
     # Setup logging
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt='%m/%d/%Y %H:%M:%S',
                         level=logging.INFO)
 
-    # Set seed
-    set_seed(args.seed)
+    args = parse_args(raw_args)
 
     model, tokenizer = get_model(args)
 
