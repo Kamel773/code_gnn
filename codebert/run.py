@@ -258,9 +258,9 @@ def evaluate(args, model, tokenizer, eval_when_training=False):
         label = batch[1].to(args.device)
         with torch.no_grad():
             if args.output_hidden_states:
-                lm_loss, logit, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
+                lm_loss, logit, _ = model(inputs, label, output_hidden_states=args.output_hidden_states)
             else:
-                lm_loss, logit = model(inputs, labels)
+                lm_loss, logit = model(inputs, label)
             eval_loss += lm_loss.mean().item()
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
@@ -306,9 +306,9 @@ def test(args, model, tokenizer):
         label = batch[1].to(args.device)
         with torch.no_grad():
             if args.output_hidden_states:
-                logit, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
+                lm_loss, logit, _ = model(inputs, label, output_hidden_states=args.output_hidden_states)
             else:
-                logit = model(inputs, labels)
+                lm_loss, logit = model(inputs, label)
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
 
