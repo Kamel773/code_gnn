@@ -1,0 +1,6 @@
+# Also install pytorch 1.9
+transformers
+matplotlib
+numpy
+tqdm
+tensorboard

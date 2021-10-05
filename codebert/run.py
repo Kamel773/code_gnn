@@ -42,7 +42,7 @@ except:
 
 from tqdm import tqdm
 import multiprocessing
-from model import Model
+from codebert.model import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (AdamW, get_linear_schedule_with_warmup,
@@ -182,10 +182,7 @@ def train(args, train_dataset, model, tokenizer):
             inputs = batch[0].to(args.device)
             labels = batch[1].to(args.device)
             model.train()
-            if args.output_hidden_states:
-                loss, logits, _ = model(inputs, labels, output_hidden_states=args.output_hidden_states)
-            else:
-                loss, logits = model(inputs, labels)
+            loss, logits = model(inputs, labels)
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
             loss.backward()
@@ -257,10 +254,7 @@ def evaluate(args, model, tokenizer, eval_when_training=False):
         inputs = batch[0].to(args.device)
         label = batch[1].to(args.device)
         with torch.no_grad():
-            if args.output_hidden_states:
-                lm_loss, logit, _ = model(inputs, label, output_hidden_states=args.output_hidden_states)
-            else:
-                lm_loss, logit = model(inputs, label)
+            lm_loss, logit = model(inputs, label)
             eval_loss += lm_loss.mean().item()
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
@@ -305,10 +299,7 @@ def test(args, model, tokenizer):
         inputs = batch[0].to(args.device)
         label = batch[1].to(args.device)
         with torch.no_grad():
-            if args.output_hidden_states:
-                lm_loss, logit, _ = model(inputs, label, output_hidden_states=args.output_hidden_states)
-            else:
-                lm_loss, logit = model(inputs, label)
+            lm_loss, logit = model(inputs, label)
             logits.append(logit.cpu().numpy())
             labels.append(label.cpu().numpy())
 
@@ -408,14 +399,8 @@ def parse_args(raw_args=None):
                         help="random seed for initialization")
     parser.add_argument('--server_ip', type=str, default='', help="For distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="For distant debugging.")
-    parser.add_argument('--output_hidden_states', action='store_true',
-                        help="Output the hidden states of the model.")
 
     args = parser.parse_args(raw_args)
-    return args
-
-def main(raw_args=None):
-    args = parse_args(raw_args)
 
     # Setup distant debugging if needed
     if args.server_ip and args.server_port:
@@ -435,13 +420,19 @@ def main(raw_args=None):
     args.device = device
     args.per_gpu_train_batch_size = args.train_batch_size // args.n_gpu
     args.per_gpu_eval_batch_size = args.eval_batch_size // args.n_gpu
+
+    # Set seed
+    set_seed(args.seed)
+
+    return args
+
+def main(raw_args=None):
     # Setup logging
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt='%m/%d/%Y %H:%M:%S',
                         level=logging.INFO)
 
-    # Set seed
-    set_seed(args.seed)
+    args = parse_args(raw_args)
 
     model, tokenizer = get_model(args)
 
