@@ -14,23 +14,26 @@ logger = logging.getLogger(__name__)
 joern_bin = Path(__file__).parent / 'old-joern/joern-parse'
 assert joern_bin.exists(), joern_bin
 
+jars = [
+    Path("old-joern/projects/extensions/joern-fuzzyc/build/libs/joern-fuzzyc.jar"),
+    Path('old-joern/projects/extensions/jpanlib/build/libs/jpanlib.jar'),
+]
+jars += Path('old-joern/projects/octopus/lib').glob('*.jar')
+sep = ';' if os.name == 'nt' else ':'
+jars_str = sep.join(str(j) for j in jars)
 
-def gather_stmts(nodes):
-    statements = []
-    for node in nodes:
-        if node["isCFGNode"] == True and node["type"].endswith('Statement') and node["code"]:
-            statements.append(node)
-    return statements
 
-
-def list_files(startpath):
-    for root, dirs, files in os.walk(startpath):
-        level = root.count(os.sep)
-        indent = ' ' * 4 * (level)
-        logger.debug('{}{}/'.format(indent, os.path.basename(root)))
-        subindent = ' ' * 4 * (level + 1)
-        for f in files:
-            logger.debug('{}{}'.format(subindent, f))
+def run_joern(joern_dir, tmpfile_dir):
+    cmd = f'java ' \
+          f'-cp "{jars_str}" ' \
+          f'tools.parser.ParserMain ' \
+          f'-outformat csv ' \
+          f'-outdir {joern_dir} ' \
+          f'{tmpfile_dir}'
+    print(cmd)
+    proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode != 0:
+        raise Exception(proc.stdout.decode())
 
 
 def parse(filepath):
@@ -40,29 +43,23 @@ def parse(filepath):
     if not tmp_root.exists():
         tmp_root.mkdir(parents=True)
     with tempfile.TemporaryDirectory(prefix=str(tmp_root.absolute()) + '/') as tmp_dir:
-        tmp_dir = Path(tmp_dir)
+        tmp_dir = Path(tmp_dir).relative_to(Path.cwd())
         # Invoke joern
         tmpfile_dir = tmp_dir / 'tmpfile'
         tmpfile_dir.mkdir()
         dst_filepath = tmpfile_dir / filepath.name
         shutil.copyfile(filepath, dst_filepath)
         joern_dir = tmp_dir / 'parsed'
-        try:
-            cmd = f'bash {joern_bin} {tmpfile_dir.absolute()} -outdir {joern_dir.absolute()}'
-            proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            if proc.returncode != 0:
-                logger.error(proc.stdout.decode())
-                return
-            output_path = joern_dir / str(dst_filepath.absolute())[1:]
-            assert output_path.exists(), output_path
-            nodes_path = output_path / 'nodes.csv'
-            edges_path = output_path / 'edges.csv'
-            assert nodes_path.exists(), nodes_path
-            assert edges_path.exists(), edges_path
-            nodes_df = pd.read_csv(nodes_path, sep='\t')
-            edges_df = pd.read_csv(edges_path, sep='\t')
-        finally:
-            shutil.rmtree(joern_dir)
+        run_joern(joern_dir, tmpfile_dir)
+
+        output_path = joern_dir / str(dst_filepath)
+        assert output_path.exists(), output_path
+        nodes_path = output_path / 'nodes.csv'
+        edges_path = output_path / 'edges.csv'
+        assert nodes_path.exists(), nodes_path
+        assert edges_path.exists(), edges_path
+        nodes_df = pd.read_csv(nodes_path, sep='\t')
+        edges_df = pd.read_csv(edges_path, sep='\t')
 
     cpg = nx.MultiDiGraph()
     nodes_attributes = [{k: v if not pd.isnull(v) else '' for k, v in dict(row).items()} for i, row in
@@ -83,7 +80,7 @@ def parse(filepath):
     unique_edge_types = sorted(set(ea["type"] for ea in edges_attributes))
     edge_type_idx = {et: i for i, et in enumerate(unique_edge_types)}
     for ea in edges_attributes:
-        ea.update({"label": f'({ea["type"]}): {ea["var"]}', "color": edge_type_idx[ea["type"]], "colorscheme": "set19"})  # Graphviz label
+        ea.update({"label": f'({ea["type"]}): {ea["var"]}', "color": edge_type_idx[ea["type"]], "colorscheme": "pastel28"})  # Graphviz label
     edges = list(zip(edges_df["start"].values.tolist(), edges_df["end"].values.tolist(), edges_attributes))
     cpg.add_edges_from(edges)
 
