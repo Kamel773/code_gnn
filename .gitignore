@@ -1,14 +1,15 @@
+# Temp files
 .idea
-joern
-old-joern
-tmp
-out
-/pytorch_geometric/
+.pytest_cache
+
+# Outputs
+/tmp/
+/out/
 /runs/
 /saved_runs/
 /saved_runs_archive/
-/powerful-gnns/
-/CodeXGLUE-Defect-detection/dataset/*.jsonl
-/VulnerabilityDetectionResearch/
-/VulnerabilityDetectionResearch/.idea/
-.pytest_cache
+
+# Sub-projects
+/other/
+/joern/
+/old-joern/
