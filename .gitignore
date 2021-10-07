@@ -9,3 +9,5 @@ out
 /saved_runs_archive/
 /powerful-gnns/
 /CodeXGLUE-Defect-detection/dataset/*.jsonl
+/VulnerabilityDetectionResearch/
+/VulnerabilityDetectionResearch/.idea/
