@@ -69,9 +69,9 @@ def parse(filepath):
 
         # Cover fault in Joern exposed by tests/acceptance/loop_exchange/chrome_debian/18159_0.c
         if na["type"].endswith('Statement'):
-            col, line, offset, end_offset = (int(x) for x in na["location"].split(':'))
+            line, col, offset, end_offset = (int(x) for x in na["location"].split(':'))
             if na["type"] == 'CompoundStatement':
-                na["location"] = ':'.join(str(o) for o in (col, line, offset, end_offset))
+                na["location"] = ':'.join(str(o) for o in (line, col, offset, end_offset))
     nodes = list(zip(nodes_df["key"].values.tolist(), nodes_attributes))
     cpg.add_nodes_from(nodes)
 
