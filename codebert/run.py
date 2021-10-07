@@ -73,9 +73,8 @@ class InputFeatures(object):
 
 
 def convert_examples_to_features(js, tokenizer, args):
-    # TODO: I dream of a world where we can expect the text whitespace to be cleaned up
-    #  before entering this function
-    js['func'] = ' '.join(js['func'].split())
+    """assume the text whitespace to be cleaned up before entering this function"""
+    # js['func'] = ' '.join(js['func'].split())
     encoded = tokenizer(js['func']).encodings[0]
     source_tokens = encoded.tokens[:args.block_size - 2]
     source_ids = tokenizer.convert_tokens_to_ids(source_tokens)

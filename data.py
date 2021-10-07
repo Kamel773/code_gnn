@@ -49,7 +49,7 @@ edge_type_map = {
 def get_dataset(embed_type=None):
 
     code_files = [
-        "test.c",
+        "test-project/test.c",
         # 'x42/c/X42.c',
     ]
 

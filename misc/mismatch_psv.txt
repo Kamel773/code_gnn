@@ -1,0 +1,33 @@
+1|int Ġmain () Ġ{ Ġint Ġx Ġ= Ġ0 ; Ġfor Ġ( int Ġi Ġ= Ġ0 ; Ġi Ġ< Ġ10 ; Ġi Ġ++ ) Ġ{ Ġx Ġ++ ; Ġ} Ġreturn Ġx ; Ġ}|tmp\\0gqvejbh\\tmpfile\\test.c|File|
+2|Ġ{ Ġint Ġx Ġ= Ġ0 ; Ġfor Ġ( int Ġi Ġ= Ġ0 ; Ġi Ġ< Ġ10 ; Ġi Ġ++ ) Ġ{ Ġx Ġ++ ; Ġ} Ġreturn Ġx ; Ġ}|main|Function|1:0:0:74
+3|Ġint Ġx Ġ= Ġ0|main ()|FunctionDef|1:0:12:86
+4|Ġx Ġ= Ġ0||CompoundStatement|1:11:11:74
+5|Ġx|int x = 0 ;|IdentifierDeclStatement|1:1:13:22
+6|Ġx|x = 0|IdentifierDecl|1:5:17:21
+7|Ġx Ġ= Ġ0|int|IdentifierDeclType|1:5:17:17
+9|Ġ0|x = 0|AssignmentExpression|1:5:17:21
+10|Ġfor Ġ( int Ġi Ġ= Ġ0 ; Ġi Ġ< Ġ10 ; Ġi Ġ++|x|Identifier|1:5:17:17
+11|int Ġi Ġ= Ġ0|0|PrimaryExpression|1:9:21:21
+12|int Ġi Ġ= Ġ0|for ( int i = 0 ; i < 10 ; i ++ )|ForStatement|1:12:24:52
+13|Ġi Ġ= Ġ0|int i = 0 ;|ForInit|1:17:29:38
+14|Ġi|int i = 0 ;|IdentifierDeclStatement|1:17:29:38
+15|Ġi|i = 0|IdentifierDecl|1:21:33:37
+16|Ġi Ġ= Ġ0|int|IdentifierDeclType|1:21:33:33
+18|Ġ0|i = 0|AssignmentExpression|1:21:33:37
+19|Ġi Ġ< Ġ10|i|Identifier|1:21:33:33
+20|Ġi Ġ< Ġ10|0|PrimaryExpression|1:25:37:37
+21|Ġi|i < 10|Condition|1:28:40:45
+22|Ġ10|i < 10|RelationalExpression|1:28:40:45
+23|Ġi Ġ++|i|Identifier|1:28:40:40
+24|Ġi|10|PrimaryExpression|1:32:44:45
+25|Ġ++|i ++|PostIncDecOperationExpression|1:36:48:51
+26|Ġ{ Ġx Ġ++ ; Ġ}|i|Identifier|1:36:48:48
+27|Ġx Ġ++|++|IncDec|1:38:50:51
+28|Ġx Ġ++||CompoundStatement|1:42:54:62
+29|Ġx|x ++|ExpressionStatement|1:44:56:60
+30|Ġ++|x ++|PostIncDecOperationExpression|1:44:56:59
+31|Ġreturn Ġx|x|Identifier|1:44:56:56
+32|Ġx|++|IncDec|1:46:58:59
+33|int|return x ;|ReturnStatement|1:52:64:72
+34|Ġint Ġx Ġ=|x|Identifier|1:59:71:71
+35|()|int|ReturnType|1:0:0:2
