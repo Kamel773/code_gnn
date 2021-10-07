@@ -11,3 +11,4 @@ out
 /CodeXGLUE-Defect-detection/dataset/*.jsonl
 /VulnerabilityDetectionResearch/
 /VulnerabilityDetectionResearch/.idea/
+.pytest_cache
