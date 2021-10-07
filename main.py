@@ -17,7 +17,7 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = get_dataset(use_codebert=True)
+    dataset = get_dataset(use_word2vec=True)
 
     device = torch.device('cuda')
 

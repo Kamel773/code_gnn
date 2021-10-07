@@ -1,6 +1,8 @@
 import itertools
+import os
 from collections import defaultdict
 
+import gensim
 import networkx as nx
 import torch
 from matplotlib import pyplot as plt
@@ -91,26 +93,58 @@ def get_codebert_embedding(file, cpg, codebert_api):
     return embedding
 
 
-def get_dataset(use_codebert=False):
-    # Read data into huge `Data` list.
-    if use_codebert:
-        codebert_api = CodeBERTAPI()
-    else:
-        codebert_api = None
+def get_word2vec_embedding(cpg, wv_model):
+    node_code = nx.get_node_attributes(cpg, 'code')
+    node_type = nx.get_node_attributes(cpg, 'type')
+
+    def get_node_embedding(node):
+        code = node_code[node]
+        tokens = code.strip().split()
+        token_embeddings = [torch.tensor(wv_model.wv[tok]) for tok in tokens if tok in wv_model.wv]
+        if len(token_embeddings) == 0:
+            node_embedding = torch.zeros(wv_model.vector_size)
+        else:
+            node_embedding = torch.stack(token_embeddings, dim=0).mean(dim=0)
+        return node_embedding
+
+    node_embeddings = [get_node_embedding(node) for node in cpg.nodes]
+    embedding = torch.stack(node_embeddings, dim=0)
+
+    return embedding
+
+
+def get_dataset(use_codebert=False, use_word2vec=False):
+    if use_word2vec or use_codebert:
+        assert not (use_word2vec and use_codebert), 'word2vec and codebert should be used independently'
+
     code_files = [
         "test.c",
         # 'x42/c/X42.c',
     ]
+
+    # Read data into huge `Data` list.
+    if use_codebert:
+        codebert_api = CodeBERTAPI()
+    elif use_word2vec:
+        corpus_pretrained = 'word2vec/devign.wv'  # TODO: initialize this for the dataset we're actually training on
+        assert os.path.exists(corpus_pretrained), f"Train Word2Vec and save to {corpus_pretrained}! You're on your own bud."
+        wv_model = gensim.models.Word2Vec.load(corpus_pretrained)
+    else:
+        codebert_api = None
+        wv_model = None
+
     data_list = []
-    for code in code_files:
-        cpg = parse(code)
+    for file in code_files:
+        cpg = parse(file)
 
         data = HeteroData()
 
         num_features_edge = 128
 
         if use_codebert:
-            data['node'].x = get_codebert_embedding(code, cpg, codebert_api)
+            data['node'].x = get_codebert_embedding(file, cpg, codebert_api)
+        elif use_word2vec:
+            data['node'].x = get_word2vec_embedding(cpg, wv_model)
         else:
             num_features_node = 128
             data['node'].x = torch.randn((len(cpg.nodes), num_features_node))
