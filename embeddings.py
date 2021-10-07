@@ -53,11 +53,12 @@ class CodeBERTEmbeddingGetter(EmbeddingGetter):
                         absolute_t_end_i = t_i
                         break
                 if absolute_t_begin_i is None or absolute_t_end_i is None:
-                    continue
-                tokens = features[0].encoded.tokens[absolute_t_begin_i:absolute_t_end_i + 1]
-                token_text = ' '.join(tokens)
-                embeddings = token_embeddings[absolute_t_begin_i:absolute_t_end_i + 1]
-                embed = torch.mean(torch.stack(embeddings, dim=0), dim=0).squeeze(dim=0)
+                    pass
+                else:
+                    tokens = features[0].encoded.tokens[absolute_t_begin_i:absolute_t_end_i + 1]
+                    token_text = ' '.join(tokens)
+                    embeddings = token_embeddings[absolute_t_begin_i:absolute_t_end_i + 1]
+                    embed = torch.mean(torch.stack(embeddings, dim=0), dim=0).squeeze(dim=0)
             node_tokens.append(token_text)
             node_embeddings.append(embed)
 

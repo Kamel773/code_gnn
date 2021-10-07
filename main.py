@@ -17,7 +17,7 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = get_dataset(embedding='word2vec')
+    dataset = get_dataset(embed_type='word2vec')
 
     device = torch.device('cuda')
 

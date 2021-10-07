@@ -46,7 +46,7 @@ edge_type_map = {
 }
 
 
-def get_dataset(embedding=None):
+def get_dataset(embed_type=None):
 
     code_files = [
         "test.c",
@@ -54,9 +54,9 @@ def get_dataset(embedding=None):
     ]
 
     # Read data into huge `Data` list.
-    if embedding == 'codebert':
+    if embed_type == 'codebert':
         embedding_getter = CodeBERTEmbeddingGetter()
-    elif embedding == 'word2vec':
+    elif embed_type == 'word2vec':
         embedding_getter = Word2VecEmbeddingGetter()
     else:
         embedding_getter = RandomEmbeddingGetter()
