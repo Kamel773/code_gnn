@@ -93,9 +93,29 @@ def get_codebert_embedding(file, cpg, codebert_api):
     return embedding
 
 
+# Source: https://github.com/VulDetProject/ReVeal/blob/ca31b783384b4cdb09b69950e48f79fa0748ef1d/data_processing/create_ggnn_data.py#L225-L242
+type_map = {
+    'AndExpression': 1, 'Sizeof': 2, 'Identifier': 3, 'ForInit': 4, 'ReturnStatement': 5, 'SizeofOperand': 6,
+    'InclusiveOrExpression': 7, 'PtrMemberAccess': 8, 'AssignmentExpression': 9, 'ParameterList': 10,
+    'IdentifierDeclType': 11, 'SizeofExpression': 12, 'SwitchStatement': 13, 'IncDec': 14, 'Function': 15,
+    'BitAndExpression': 16, 'UnaryExpression': 17, 'DoStatement': 18, 'GotoStatement': 19, 'Callee': 20,
+    'OrExpression': 21, 'ShiftExpression': 22, 'Decl': 23, 'CFGErrorNode': 24, 'WhileStatement': 25,
+    'InfiniteForNode': 26, 'RelationalExpression': 27, 'CFGExitNode': 28, 'Condition': 29, 'BreakStatement': 30,
+    'CompoundStatement': 31, 'UnaryOperator': 32, 'CallExpression': 33, 'CastExpression': 34,
+    'ConditionalExpression': 35, 'ArrayIndexing': 36, 'PostIncDecOperationExpression': 37, 'Label': 38,
+    'ArgumentList': 39, 'EqualityExpression': 40, 'ReturnType': 41, 'Parameter': 42, 'Argument': 43, 'Symbol': 44,
+    'ParameterType': 45, 'Statement': 46, 'AdditiveExpression': 47, 'PrimaryExpression': 48, 'DeclStmt': 49,
+    'CastTarget': 50, 'IdentifierDeclStatement': 51, 'IdentifierDecl': 52, 'CFGEntryNode': 53, 'TryStatement': 54,
+    'Expression': 55, 'ExclusiveOrExpression': 56, 'ClassDef': 57, 'File': 58, 'UnaryOperationExpression': 59,
+    'ClassDefStatement': 60, 'FunctionDef': 61, 'IfStatement': 62, 'MultiplicativeExpression': 63,
+    'ContinueStatement': 64, 'MemberAccess': 65, 'ExpressionStatement': 66, 'ForStatement': 67, 'InitializerList': 68,
+    'ElseStatement': 69
+}
+type_one_hot = torch.eye(len(type_map))
+
+
 def get_word2vec_embedding(cpg, wv_model):
     node_code = nx.get_node_attributes(cpg, 'code')
-    node_type = nx.get_node_attributes(cpg, 'type')
 
     def get_node_embedding(node):
         code = node_code[node]
@@ -136,18 +156,24 @@ def get_dataset(use_codebert=False, use_word2vec=False):
     data_list = []
     for file in code_files:
         cpg = parse(file)
-
         data = HeteroData()
 
-        num_features_edge = 128
-
+        # Get statement embedding
         if use_codebert:
-            data['node'].x = get_codebert_embedding(file, cpg, codebert_api)
+            node_embeddings = get_codebert_embedding(file, cpg, codebert_api)
         elif use_word2vec:
-            data['node'].x = get_word2vec_embedding(cpg, wv_model)
+            node_embeddings = get_word2vec_embedding(cpg, wv_model)
         else:
-            num_features_node = 128
-            data['node'].x = torch.randn((len(cpg.nodes), num_features_node))
+            node_embeddings = torch.randn((len(cpg.nodes), 128))
+
+        # Concatenate node type
+        node_type = nx.get_node_attributes(cpg, 'type')
+        type_embeddings = torch.stack([type_one_hot[type_map[node_type[node]] - 1] for node in cpg.nodes])
+        node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+
+        data['node'].x = node_embeddings
+
+        num_features_edge = 128
         edges_by_type = defaultdict(list)
         for u, v, t in cpg.edges.data("type"):
             edges_by_type[t].append((u, v))
