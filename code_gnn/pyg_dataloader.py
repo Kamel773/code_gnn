@@ -5,7 +5,7 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
-from cpg import parse
+from old_cpg import parse
 # https://pytorch-geometric.readthedocs.io/en/latest/notes/heterogeneous.html
 from torch_geometric.data import HeteroData
 

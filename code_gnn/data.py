@@ -2,6 +2,7 @@ import copy
 import itertools
 import json
 import os
+import traceback
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -12,7 +13,8 @@ from torch_geometric.data import Data
 from torch_geometric.utils import to_networkx
 import tqdm
 
-from cpg import parse
+from cpg import CPG
+from old_cpg import parse, parse_with_tmp
 from embeddings import CodeBERTEmbeddingGetter, Word2VecEmbeddingGetter, RandomEmbeddingGetter
 from google_drive_downloader import GoogleDriveDownloader as gdd
 
@@ -34,6 +36,24 @@ node_type_map = {
     'ContinueStatement': 64, 'MemberAccess': 65, 'ExpressionStatement': 66, 'ForStatement': 67, 'InitializerList': 68,
     'ElseStatement': 69
 }
+# node_types = [
+#     'METHOD',
+#     'PARAM',
+#     'BLOCK',
+#     'LOCAL',
+#     '<operator>.assignment',
+#     'IDENTIFIER',
+#     '<operator>.indirectFieldAccess',
+#     'FIELD_IDENTIFIER',
+#     'ff_vda_destroy_decoder',
+#     '<operator>.addressOf',
+#     'CONTROL_STRUCTURE',
+#     'ff_h264_decoder.close',
+#     'RETURN',
+#     'LITERAL',
+#     'METHOD_RETURN',
+# ]
+# node_type_map = {n: i for i, n in enumerate(node_type_map)}
 type_one_hot = torch.eye(len(node_type_map))
 # We currently consider 12 types of edges mentioned in ICST paper
 edge_type_map = {
@@ -101,8 +121,6 @@ class MyCodeDataset(InMemoryDataset):
         ret = []
         for file_name in self.file_names:
             ret.append(file_name)
-            ret.append('metadata_' + file_name)
-            ret.append('files_' + file_name)
         return ret
 
     def get_files_path(self, path):
@@ -130,7 +148,9 @@ class MyCodeDataset(InMemoryDataset):
             dst_dir = self.get_files_path(path)
             dst_dir.mkdir(exist_ok=True)
             for d in data:
-                file_path = dst_dir / d["file_name"]
+                file_dst_dir = dst_dir / d["file_name"]
+                file_dst_dir.mkdir(exist_ok=True)  # TODO: There might be an accidental double write bug
+                file_path = file_dst_dir / d["file_name"]
                 with open(file_path, 'w') as f:
                     # TODO: Possibly collapse whitespaces
                     f.write(d["func"])
@@ -149,13 +169,19 @@ class MyCodeDataset(InMemoryDataset):
             with open(self.get_metadata_path(raw_path)) as f:
                 data = json.load(f)
             source_dir = self.get_files_path(raw_path)
-            code_files = [source_dir / d["file_name"] for d in data]
+            code_files = [source_dir / d["file_name"] / d["file_name"] for d in data]
             labels = [d["target"] for d in data]
 
+            parser = CPG()
+
             input_data = list(zip(code_files, labels))
+            input_data = input_data[:100]
             for file, label in tqdm.tqdm(input_data, desc=raw_path, total=len(input_data)):
-                data = self.process_one(file, label)
-                data_list.append(data)
+                # with open(file) as f:
+                #     code = f.read()
+                data = self.process_one(file, label, parser)
+                if data is not None:
+                    data_list.append(data)
 
             # input_data = list(zip(code_files, labels, [self.embedding_getter] * len(code_files)))
             # with Pool(self.workers) as pool:
@@ -171,24 +197,30 @@ class MyCodeDataset(InMemoryDataset):
         print(data)
         return data_list
 
-    def process_one(self, file, label):
-        cpg = parse(file)
+    def process_one(self, file, label, parser):
+        try:
+            cpg = parser.parse(file)
+            # cpg = parse(file)
+            # cpg = parse_with_tmp(file)
 
-        # Get statement embedding
-        node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+            # Get statement embedding
+            node_embeddings = self.embedding_getter.get_embedding(file, cpg)
 
-        # Concatenate node type
-        node_type = nx.get_node_attributes(cpg, 'type')
-        type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
-        node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+            # Concatenate node type
+            node_type = nx.get_node_attributes(cpg, 'type')
+            type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
+            node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
 
-        # TODO: Find and remove isolated nodes because of this filtering
-        u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
-        edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
+            # TODO: Find and remove isolated nodes because of this filtering
+            u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
+            edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
 
-        edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
-        data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
-        return data
+            edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
+            data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
+            return data
+        except Exception:
+            traceback.print_exc()
+            return None
 
 
 def draw_9_plots(dataset):
