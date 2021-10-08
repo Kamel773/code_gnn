@@ -46,12 +46,12 @@ from codebert.model import Model
 
 cpu_cont = multiprocessing.cpu_count()
 from transformers import (AdamW, get_linear_schedule_with_warmup,
-                          RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer)
+                          RobertaConfig, RobertaForSequenceClassification, RobertaTokenizerFast)
 
 logger = logging.getLogger(__name__)
 
 MODEL_CLASSES = {
-    'roberta': (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
+    'roberta': (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizerFast),
 }
 
 
@@ -63,23 +63,24 @@ class InputFeatures(object):
                  input_ids,
                  idx,
                  label,
-
+                 encoded=None,
                  ):
         self.input_tokens = input_tokens
         self.input_ids = input_ids
         self.idx = str(idx)
         self.label = label
+        self.encoded = encoded
 
 
 def convert_examples_to_features(js, tokenizer, args):
-    # source
-    code = ' '.join(js['func'].split())
-    code_tokens = tokenizer.tokenize(code)[:args.block_size - 2]
-    source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
+    """assume the text whitespace to be cleaned up before entering this function"""
+    # js['func'] = ' '.join(js['func'].split())
+    encoded = tokenizer(js['func']).encodings[0]
+    source_tokens = encoded.tokens[:args.block_size - 2]
     source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
     padding_length = args.block_size - len(source_ids)
     source_ids += [tokenizer.pad_token_id] * padding_length
-    return InputFeatures(source_tokens, source_ids, js['idx'], js['target'])
+    return InputFeatures(source_tokens, source_ids, js['idx'], js['target'], encoded)
 
 
 class TextDataset(Dataset):
