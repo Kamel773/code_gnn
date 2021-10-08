@@ -18,7 +18,7 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = MyCodeDataset(embed_type='word2vec')
+    dataset = MyCodeDataset(root='data', name='devign', embed_type='word2vec')
     # dataset = TUDataset(root='data/TUDataset', name='PROTEINS')
 
     device = torch.device('cuda')
