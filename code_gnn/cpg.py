@@ -30,7 +30,7 @@ def run_joern(joern_dir, tmpfile_dir):
           f'-outformat csv ' \
           f'-outdir {joern_dir} ' \
           f'{tmpfile_dir}'
-    print(cmd)
+    # print(cmd)  # For debugging
     proc = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if proc.returncode != 0:
         raise Exception(proc.stdout.decode())
@@ -72,7 +72,7 @@ def parse(filepath):
             line, col, offset, end_offset = (int(x) for x in na["location"].split(':'))
             if na["type"] == 'CompoundStatement':
                 na["location"] = ':'.join(str(o) for o in (line, col, offset, end_offset))
-    nodes = list(zip(nodes_df["key"].values.tolist(), nodes_attributes))
+    nodes = list(zip([x-1 for x in nodes_df["key"].values.tolist()], nodes_attributes))
     cpg.add_nodes_from(nodes)
 
     # Multigraph
@@ -81,7 +81,7 @@ def parse(filepath):
     edge_type_idx = {et: i for i, et in enumerate(unique_edge_types)}
     for ea in edges_attributes:
         ea.update({"label": f'({ea["type"]}): {ea["var"]}', "color": edge_type_idx[ea["type"]], "colorscheme": "pastel28"})  # Graphviz label
-    edges = list(zip(edges_df["start"].values.tolist(), edges_df["end"].values.tolist(), edges_attributes))
+    edges = list(zip([x-1 for x in edges_df["start"].values.tolist()], [x-1 for x in edges_df["end"].values.tolist()], edges_attributes))
     cpg.add_edges_from(edges)
 
     return cpg

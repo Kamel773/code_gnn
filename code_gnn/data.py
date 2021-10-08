@@ -1,10 +1,11 @@
 import itertools
+import os
 from collections import defaultdict
 
 import networkx as nx
 import torch
 from matplotlib import pyplot as plt
-from torch_geometric.data import HeteroData
+from torch_geometric.data import HeteroData, Data
 from torch_geometric.utils import to_networkx
 
 from cpg import parse
@@ -45,53 +46,83 @@ edge_type_map = {
     'IS_FUNCTION_OF_CFG': 12
 }
 
+import torch
+from torch_geometric.data import InMemoryDataset, download_url
 
-def get_dataset(embed_type=None):
 
-    code_files = [
-        "data/test-project/test.c",
-        # 'x42/c/X42.c',
-    ]
+class MyCodeDataset(InMemoryDataset):
+    def __init__(self, root='data/my_code_dataset', transform=None, pre_transform=None, embed_type=None):
+        if embed_type == 'codebert':
+            self.embedding_getter = CodeBERTEmbeddingGetter()
+        elif embed_type == 'word2vec':
+            self.embedding_getter = Word2VecEmbeddingGetter()
+        elif embed_type is None:
+            self.embedding_getter = RandomEmbeddingGetter()
+        else:
+            raise NotImplementedError('Embedding type ' + embed_type)
+        self.name = '-'.join((self.__class__.__name__, embed_type))
+        self.embed_type = embed_type
 
-    # Read data into huge `Data` list.
-    if embed_type == 'codebert':
-        embedding_getter = CodeBERTEmbeddingGetter()
-    elif embed_type == 'word2vec':
-        embedding_getter = Word2VecEmbeddingGetter()
-    else:
-        embedding_getter = RandomEmbeddingGetter()
+        super().__init__(root, transform, pre_transform)
 
-    data_list = []
-    for file in code_files:
-        cpg = parse(file)
-        data = HeteroData()
+        self.data, self.slices = torch.load(self.processed_paths[0])
 
-        # Get statement embedding
-        node_embeddings = embedding_getter.get_embedding(file, cpg)
+    @property
+    def processed_dir(self) -> str:
+        return os.path.join(self.root, self.embed_type)
 
-        # Concatenate node type
-        node_type = nx.get_node_attributes(cpg, 'type')
-        type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
-        node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+    @property
+    def raw_file_names(self):
+        return []
 
-        data['node'].x = node_embeddings
+    @property
+    def processed_file_names(self):
+        return 'processed_data.pt'
 
-        edge_type = nx.get_edge_attributes(cpg, 'type')
-        edges_by_type = defaultdict(list)
-        for u, v, t in cpg.edges.data("type"):
-            edges_by_type[t].append((u, v))
-        for t, edges in edges_by_type.items():
-            edge_data = data['node', t, 'node']
-            edge_data.edge_index = torch.tensor(edges)
-            edge_data.edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type[edge]]]) for edge in cpg.edges if edge_type[edge] != 'IS_FILE_OF'], dim=0)
-        data_list.append(data)
+    def download(self):
+        pass
 
-    data = data_list[0]
-    print(data)
-    print(data.metadata())
-    print(data.x_dict)
-    print(data.edge_index_dict)
-    return data_list
+    def process(self):
+        # NOTE: dummy data
+        code_files = [
+            "data/test-project/test.c",
+        ] * 10
+        labels = [0] * 10
+
+        # Read data into huge `Data` list.
+        data_list = []
+        for file, label in zip(code_files, labels):
+            cpg = parse(file)
+
+            # Get statement embedding
+            node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+
+            # Concatenate node type
+            node_type = nx.get_node_attributes(cpg, 'type')
+            type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
+            node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+
+            # TODO: Find and remove isolated nodes because of this filtering
+            u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
+            edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
+
+            edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
+            data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
+            data_list.append(data)
+
+        self.data, self.slices = self.collate(data_list)
+        torch.save((self.data, self.slices), self.processed_paths[0])
+
+        data = data_list[0]
+        print(data)
+        return data_list
+
+    # @property
+    # def num_node_features(self) -> int:
+    #     data = self[0]
+    #     first_num_node_features = data.node_stores[0].num_node_features
+    #     assert all(store.num_node_features == first_num_node_features for store in data.node_stores)
+    #     return first_num_node_features
 
 
 def draw_9_plots(dataset):

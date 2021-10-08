@@ -5,8 +5,9 @@ import shutil
 import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
+from torch_geometric.datasets import TUDataset
 
-from data import get_dataset
+from data import MyCodeDataset
 from model import MyGIN
 from trainer import train
 
@@ -17,7 +18,8 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = get_dataset(embed_type='word2vec')
+    dataset = MyCodeDataset(embed_type='word2vec')
+    # dataset = TUDataset(root='data/TUDataset', name='PROTEINS')
 
     device = torch.device('cuda')
 
