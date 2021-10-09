@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import itertools
 import json
 import os
@@ -14,11 +15,15 @@ from matplotlib import pyplot as plt
 from torch_geometric.data import Data
 from torch_geometric.utils import to_networkx
 import tqdm
+from typing import List, Union
 
-from cpg import CPG
-from cpg import parse, parse_with_tmp, CachedCPG
+from cpg import CachedCPG
 from embeddings import CodeBERTEmbeddingGetter, Word2VecEmbeddingGetter, RandomEmbeddingGetter
 from google_drive_downloader import GoogleDriveDownloader as gdd
+
+import torch
+from torch_geometric.data import InMemoryDataset
+from typing import Callable
 
 # Source: https://github.com/VulDetProject/ReVeal/blob/ca31b783384b4cdb09b69950e48f79fa0748ef1d/data_processing/create_ggnn_data.py#L225-L257
 node_type_map = {
@@ -38,24 +43,6 @@ node_type_map = {
     'ContinueStatement': 64, 'MemberAccess': 65, 'ExpressionStatement': 66, 'ForStatement': 67, 'InitializerList': 68,
     'ElseStatement': 69
 }
-# node_types = [
-#     'METHOD',
-#     'PARAM',
-#     'BLOCK',
-#     'LOCAL',
-#     '<operator>.assignment',
-#     'IDENTIFIER',
-#     '<operator>.indirectFieldAccess',
-#     'FIELD_IDENTIFIER',
-#     'ff_vda_destroy_decoder',
-#     '<operator>.addressOf',
-#     'CONTROL_STRUCTURE',
-#     'ff_h264_decoder.close',
-#     'RETURN',
-#     'LITERAL',
-#     'METHOD_RETURN',
-# ]
-# node_type_map = {n: i for i, n in enumerate(node_type_map)}
 type_one_hot = torch.eye(len(node_type_map))
 # We currently consider 12 types of edges mentioned in ICST paper
 edge_type_map = {
@@ -73,16 +60,57 @@ edge_type_map = {
     'IS_FUNCTION_OF_CFG': 12
 }
 
-import torch
-from torch_geometric.data import InMemoryDataset
+
+
+@dataclasses.dataclass
+class CodeDatasetConfig:
+    download_links: List[str]
+    file_names: List[str]
+    label_tag: Union[str, List[int]]
+    code_tag: str
+    file_name_hash_fields: List[str]
+    extra_file_names: List[str] = dataclasses.field(default_factory=lambda: [])
+    unzip: bool = False
+
+    def __post_init__(self):
+        lengths_to_validate = [len(self.download_links), len(self.file_names)]
+        if isinstance(self.file_name_hash_fields, list):
+            lengths_to_validate.append(self.file_name_hash_fields)
+        assert all([length == lengths_to_validate[0] for length in lengths_to_validate]), lengths_to_validate
+
+    def file_name_hash(self, data):
+        return '_'.join(map(str, (data[field] for field in self.file_name_hash_fields))) + '.c'
 
 
 class MyCodeDataset(InMemoryDataset):
-    download_links = {
-        'devign': ['1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF'],
-    }
-    file_names = {
-        'devign': ['function.json'],
+    configs = {
+        # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
+        "devign": CodeDatasetConfig(
+            download_links=['1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF'],
+            file_names=['function.json'],
+            code_tag='func',
+            label_tag='target',
+            file_name_hash_fields=["project", "commit_id", "target"],
+        ),
+        # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
+        "reveal": CodeDatasetConfig(
+            download_links=['1KuIYgFcvWUXheDhT--cBALsfy1I4utOy'],
+            file_names=['vulnerables.json', 'non-vulnerables.json'],
+            code_tag='code',
+            label_tag=[1, 0],
+            extra_file_names=[],
+            file_name_hash_fields=["project", "hash"],
+            unzip=True,
+        ),
+        # https://github.com/ZeoVan/MSR_20_Code_vulnerability_CSV_Dataset
+        "big-vuln": CodeDatasetConfig(
+            download_links=['1deNsPfeh77h1SHjJURYOeyCR96JgxB_A'],
+            file_names=['MSR_data_cleaned.json'],
+            label_tag='vul',
+            code_tag='func_before',
+            extra_file_names=['MSR_data_cleaned_json.zip'],
+            unzip=True,
+        )
     }
 
     def __init__(self, root, name, transform=None, pre_transform=None, embed_type=None, workers=8):
@@ -97,8 +125,7 @@ class MyCodeDataset(InMemoryDataset):
         self.name = name
         self.embed_type = embed_type
 
-        self.download_links = self.__class__.download_links[self.name]
-        self.file_names = self.__class__.file_names[self.name]
+        self.config = self.__class__.configs[name]
         self.workers = workers
 
         root = os.path.join(root, self.__class__.__name__)
@@ -121,7 +148,8 @@ class MyCodeDataset(InMemoryDataset):
     @property
     def raw_file_names(self):
         ret = []
-        for file_name in self.file_names:
+        ret += self.config.extra_file_names
+        for file_name in self.config.file_names:
             ret.append(file_name)
             ret.append(self.get_files_path(file_name).name)
             ret.append(self.get_parsed_path(file_name).name)
@@ -141,7 +169,7 @@ class MyCodeDataset(InMemoryDataset):
         return path.parent / ('metadata_' + path.name)
 
     def download(self):
-        for link, raw_path in zip(self.download_links, self.raw_paths):
+        for link, raw_path in zip(self.config.download_links, self.raw_paths):
             raw_path = Path(raw_path)
             if not raw_path.exists():
                 gdd.download_file_from_google_drive(file_id=link,
@@ -152,8 +180,8 @@ class MyCodeDataset(InMemoryDataset):
                 data = json.load(f)
             for d in data:
                 # NOTE: Adding this attribute for convenience, but it will not be persisted
-                d["file_name"] = '_'.join(map(str, (d["project"], d["commit_id"], d["target"]))) + '.c'
-            data = list(sorted(data, key=lambda d: d["file_name"]))
+                d["file_name"] = self.config.filename_hash(d)
+            data = list(sorted(data, key=lambda x: x["file_name"]))
             idx = 0
             for d in data:
                 d["file_name"] = f'{idx}_{d["file_name"]}'
@@ -163,7 +191,7 @@ class MyCodeDataset(InMemoryDataset):
             if not metadata_path.exists():
                 metadata = copy.deepcopy(data)
                 for d in metadata:
-                    del d["func"]
+                    del d[self.config.code_tag]
                 with open(metadata_path, 'w') as f:
                     json.dump(metadata, f)
 
@@ -192,18 +220,22 @@ class MyCodeDataset(InMemoryDataset):
     def process(self):
         # Read data into huge `Data` list.
         data_list = []
-        for raw_file_name in self.file_names:
+        for i, raw_file_name in enumerate(self.config.file_names):
             raw_path = Path(self.raw_dir) / raw_file_name
             source_dir = self.get_files_path(raw_path)
             with open(self.get_metadata_path(raw_path)) as f:
                 data = json.load(f)
 
             code_files = [source_dir / d["file_name"] for d in data]
-            labels = [d["target"] for d in data]
+            if isinstance(self.config.label_tag, str):
+                labels = [d[self.config.label_tag] for d in data]
+            else:
+                labels = [d[self.config.label_tag[i]] for d in data]
 
             parser = CachedCPG(source_dir, self.get_parsed_path(raw_path), code_files)
 
             input_data = list(zip(code_files, labels))
+            # input_data = input_data[:100]
             assert len(input_data) > 0, f'No input data from {raw_file_name}'
             errored_files = defaultdict(list)
             with tqdm.tqdm(input_data, desc=raw_file_name) as pbar:
@@ -230,7 +262,7 @@ class MyCodeDataset(InMemoryDataset):
                     except Exception:
                         pbar.write(traceback.format_exc())
                     data_list.append(data)
-            for error_msg, files in errored_files:
+            for error_msg, files in errored_files.items():
                 print(f'Error "{error_msg}":')
                 print(files)
 
