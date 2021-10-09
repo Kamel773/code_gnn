@@ -3,21 +3,18 @@ import dataclasses
 import itertools
 import json
 import os
+import re
 import shutil
-import traceback
 from collections import defaultdict
-from multiprocessing import Pool
 from pathlib import Path
 
 import networkx as nx
-import torch
 from matplotlib import pyplot as plt
-from torch_geometric.data import Data
+from torch_geometric.data import HeteroData
 from torch_geometric.utils import to_networkx
-import tqdm
-from typing import List, Union
+from typing import List, Tuple, Dict
 
-from cpg import CachedCPG
+from cpg import get_cpg, parse_all
 from embeddings import CodeBERTEmbeddingGetter, Word2VecEmbeddingGetter, RandomEmbeddingGetter
 from google_drive_downloader import GoogleDriveDownloader as gdd
 
@@ -61,22 +58,41 @@ edge_type_map = {
 }
 
 
+def bigvuln_dict_to_list(data, *args):
+    data = list(data.values())
+    for d in data:
+        del d["Summary"]
+        del d["func_after"]
+        del d["patch"]
+        del d["vul_func_with_fix"]
+        d["commit_id"] = re.split(r'[^a-zA-Z0-9]', d["commit_id"])[0]
+    return data
+
+
+def add_reveal_label(data, raw_code_file):
+    label = 1 if raw_code_file == 'vulnerables.json' else 0
+    for d in data:
+        d["label"] = label
+    return data
+
+
+def noop(data, *args):
+    return data
+
 
 @dataclasses.dataclass
 class CodeDatasetConfig:
-    download_links: List[str]
+    download_links: List[Tuple[str, str]]
     file_names: List[str]
-    label_tag: Union[str, List[int]]
+    label_tag: str
     code_tag: str
     file_name_hash_fields: List[str]
-    extra_file_names: List[str] = dataclasses.field(default_factory=lambda: [])
+    transform: Callable[[List[Dict]], List[Dict]] = noop
     unzip: bool = False
 
     def __post_init__(self):
-        lengths_to_validate = [len(self.download_links), len(self.file_names)]
-        if isinstance(self.file_name_hash_fields, list):
-            lengths_to_validate.append(self.file_name_hash_fields)
-        assert all([length == lengths_to_validate[0] for length in lengths_to_validate]), lengths_to_validate
+        if isinstance(self.label_tag, list):
+            assert len(self.file_names) == len(self.label_tag), f'{len(self.file_names)=} should equal {len(self.label_tag)=}'
 
     def file_name_hash(self, data):
         return '_'.join(map(str, (data[field] for field in self.file_name_hash_fields))) + '.c'
@@ -86,7 +102,7 @@ class MyCodeDataset(InMemoryDataset):
     configs = {
         # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
         "devign": CodeDatasetConfig(
-            download_links=['1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF'],
+            download_links=[('1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF', 'function.json')],
             file_names=['function.json'],
             code_tag='func',
             label_tag='target',
@@ -94,21 +110,24 @@ class MyCodeDataset(InMemoryDataset):
         ),
         # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
         "reveal": CodeDatasetConfig(
-            download_links=['1KuIYgFcvWUXheDhT--cBALsfy1I4utOy'],
+            download_links=[
+                ('1NPtliGlRpR0CxKIUW4ah2EUggKTHnM71', 'non-vulnerables.json'),
+                ('1I6N0Kxv5gmNzi12tpX8OZWQo7Z4w8Unz', 'vulnerables.json'),
+            ],
             file_names=['vulnerables.json', 'non-vulnerables.json'],
             code_tag='code',
-            label_tag=[1, 0],
-            extra_file_names=[],
-            file_name_hash_fields=["project", "hash"],
-            unzip=True,
+            label_tag='label',
+            file_name_hash_fields=["project", "hash", 'label'],
+            transform=add_reveal_label,
         ),
         # https://github.com/ZeoVan/MSR_20_Code_vulnerability_CSV_Dataset
         "big-vuln": CodeDatasetConfig(
-            download_links=['1deNsPfeh77h1SHjJURYOeyCR96JgxB_A'],
+            download_links=[('1deNsPfeh77h1SHjJURYOeyCR96JgxB_A', 'MSR_data_cleaned_json.zip')],
             file_names=['MSR_data_cleaned.json'],
             label_tag='vul',
             code_tag='func_before',
-            extra_file_names=['MSR_data_cleaned_json.zip'],
+            file_name_hash_fields=['project', 'commit_id', 'vul'],
+            transform=bigvuln_dict_to_list,
             unzip=True,
         )
     }
@@ -139,7 +158,10 @@ class MyCodeDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return 'processed_data.pt'
+        ret = []
+        for raw_path in self.raw_paths:
+            ret.append(self.get_processed_path(raw_path).name)
+        return ret
 
     @property
     def raw_dir(self) -> str:
@@ -147,14 +169,23 @@ class MyCodeDataset(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        ret = []
-        ret += self.config.extra_file_names
-        for file_name in self.config.file_names:
-            ret.append(file_name)
-            ret.append(self.get_files_path(file_name).name)
-            ret.append(self.get_parsed_path(file_name).name)
-            ret.append(self.get_metadata_path(file_name).name)
+        ret = self.raw_source_file_paths
+        for raw_path in self.raw_source_file_paths:
+            ret.append(self.get_files_path(raw_path).name)
+            ret.append(self.get_parsed_path(raw_path).name)
+            ret.append(self.get_metadata_path(raw_path).name)
         return ret
+
+    @property
+    def raw_source_file_paths(self):
+        ret = []
+        for file_name in self.config.file_names:
+            ret.append(Path(self.raw_dir) / file_name)
+        return ret
+
+    def get_processed_path(self, path):
+        path = Path(path)
+        return path.parent / ('processed_' + path.name + '.pt')
 
     def get_files_path(self, path):
         path = Path(path)
@@ -169,18 +200,22 @@ class MyCodeDataset(InMemoryDataset):
         return path.parent / ('metadata_' + path.name)
 
     def download(self):
-        for link, raw_path in zip(self.config.download_links, self.raw_paths):
-            raw_path = Path(raw_path)
-            if not raw_path.exists():
+        for link, dst_file in self.config.download_links:
+            dst_file = Path(self.raw_dir, dst_file)
+            if not dst_file.exists():
                 gdd.download_file_from_google_drive(file_id=link,
-                                                    dest_path=str(raw_path),
-                                                    showsize=True)
-
+                                                    dest_path=str(dst_file),
+                                                    showsize=True,
+                                                    unzip=self.config.unzip)
+        for i, raw_path in enumerate(self.raw_source_file_paths):
+            # Preprocess raw file
+            raw_path = Path(raw_path)
             with open(raw_path) as f:
                 data = json.load(f)
+            data = self.config.transform(data, raw_path.name)
             for d in data:
                 # NOTE: Adding this attribute for convenience, but it will not be persisted
-                d["file_name"] = self.config.filename_hash(d)
+                d["file_name"] = self.config.file_name_hash(d)
             data = list(sorted(data, key=lambda x: x["file_name"]))
             idx = 0
             for d in data:
@@ -201,9 +236,13 @@ class MyCodeDataset(InMemoryDataset):
                 try:
                     for d in data:
                         file_path = source_dir / d["file_name"]
-                        with open(file_path, 'w') as f:
-                            # TODO: Possibly collapse whitespaces
-                            f.write(d["func"])
+                        try:
+                            with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
+                                # TODO: Possibly collapse whitespaces
+                                f.write(d[self.config.code_tag])
+                        except OSError as e:
+                            print('Error writing file', file_path, e)
+                            open(file_path, 'a').close()
                 except Exception:
                     shutil.rmtree(source_dir)
                     raise
@@ -211,67 +250,93 @@ class MyCodeDataset(InMemoryDataset):
             parsed_path = self.get_parsed_path(raw_path)
             if not parsed_path.exists():
                 try:
-                    parser = CachedCPG(source_dir, parsed_path, [source_dir / d["file_name"] for d in data])
-                    parser.pre_parse()
+                    parse_all(source_dir, parsed_path, [source_dir / d["file_name"] for d in data])
                 except Exception:
                     shutil.rmtree(parsed_path)
                     raise
 
+
     def process(self):
         # Read data into huge `Data` list.
         data_list = []
-        for i, raw_file_name in enumerate(self.config.file_names):
-            raw_path = Path(self.raw_dir) / raw_file_name
-            source_dir = self.get_files_path(raw_path)
-            with open(self.get_metadata_path(raw_path)) as f:
-                data = json.load(f)
+        for i, raw_path in enumerate(self.raw_source_file_paths):
+            raw_path = Path(raw_path)
 
-            code_files = [source_dir / d["file_name"] for d in data]
-            if isinstance(self.config.label_tag, str):
-                labels = [d[self.config.label_tag] for d in data]
-            else:
-                labels = [d[self.config.label_tag[i]] for d in data]
+            # Preprocess each source file
+            processed_path = Path(self.processed_dir) / self.get_processed_path(raw_path).name
+            if not processed_path.exists():
+                source_dir = self.get_files_path(raw_path)
+                with open(self.get_metadata_path(raw_path)) as f:
+                    data = json.load(f)
 
-            parser = CachedCPG(source_dir, self.get_parsed_path(raw_path), code_files)
+                code_files = [source_dir / d["file_name"] for d in data]
+                labels = [int(d[self.config.label_tag]) for d in data]
 
-            input_data = list(zip(code_files, labels))
-            # input_data = input_data[:100]
-            assert len(input_data) > 0, f'No input data from {raw_file_name}'
-            errored_files = defaultdict(list)
-            with tqdm.tqdm(input_data, desc=raw_file_name) as pbar:
-                for file, label in pbar:
+                parse_dir = self.get_parsed_path(raw_path)
+
+                input_data = list(zip(code_files, labels))
+                assert len(input_data) > 0, f'No input data from {raw_path}'
+                for file, label in input_data:
                     try:
-                        cpg = parser.get_cpg(file)
-
-                        # Get statement embedding
-                        node_embeddings = self.embedding_getter.get_embedding(file, cpg)
-
-                        # Concatenate node type
-                        node_type = nx.get_node_attributes(cpg, 'type')
-                        type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
-                        node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
-
-                        # TODO: Find and remove isolated nodes because of this filtering
-                        u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
-                        edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
-
-                        edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
-                        data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
+                        cpg = get_cpg(parse_dir, file)
                     except AssertionError as e:
-                        errored_files[e].append(file)
-                    except Exception:
-                        pbar.write(traceback.format_exc())
+                        # pbar.write(f'Error parsing {file}: {e}')
+                        print(f'Error parsing {file}: {e}')
+                        continue
+                    # Make data
+                    data = HeteroData()
+
+                    # Get statement embedding
+                    node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+
+                    # Concatenate node type
+                    node_type = nx.get_node_attributes(cpg, 'type')
+                    type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
+                    node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+                    node_tag = 'node'
+                    data[node_tag].x = node_embeddings
+
+                    edge_idx_by_type = defaultdict(list)
+                    # TODO: Find and remove isolated nodes because of this filtering
+                    edge_idx = [e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF']
+                    for u, v, t in edge_idx:
+                        edge_idx_by_type[t].append((u, v))
+                    edge_idx_by_type = dict(edge_idx_by_type)
+                    for t in edge_idx_by_type:
+                        data[node_tag, t, node_tag].edge_index = torch.tensor(edge_idx_by_type[t]).t()
+
+                    data[node_tag].y = torch.tensor([label])
                     data_list.append(data)
-            for error_msg, files in errored_files.items():
-                print(f'Error "{error_msg}":')
-                print(files)
 
-        self.data, self.slices = self.collate(data_list)
-        torch.save((self.data, self.slices), self.processed_paths[0])
+                self.data, self.slices = self.collate(data_list)
+                torch.save((self.data, self.slices), processed_path)
 
-        data = data_list[0]
-        print(data)
-        return data_list
+                data = data_list[0]
+                print(data)
+
+    @property
+    def num_node_features(self) -> int:
+        data = self[0]
+        if isinstance(data, HeteroData):
+            return data['node'].num_features
+        else:
+            return super().num_node_features
+
+    @property
+    def num_classes(self) -> int:
+        data = self[0]
+        if isinstance(data, HeteroData):
+            y = self.data['node'].y
+            if y is None:
+                return 0
+            elif y.numel() == y.size(0) and not torch.is_floating_point(y):
+                return int(y.max()) + 1
+            elif y.numel() == y.size(0) and torch.is_floating_point(y):
+                return torch.unique(y).numel()
+            else:
+                return y.size(-1)
+        else:
+            return super().num_node_features
 
 
 def draw_9_plots(dataset):

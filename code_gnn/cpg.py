@@ -111,16 +111,11 @@ def read_graph(parsed_dir, filepath):
     return nodes_data, edges_data
 
 
-class CachedCPG:
-    def __init__(self, source_dir, parsed_dir, files):
-        self.source_dir = Path(source_dir)
-        self.parse_dir = Path(parsed_dir)
-        self.files = files
+def parse_all(parse_dir, source_dir, files):
+    print(f'Parsing {len(files)} files...')
+    run_joern(parse_dir, source_dir, src_files=set(map(str, files)))
 
-    def pre_parse(self):
-        print(f'Parsing {len(self.files)} files...')
-        run_joern(self.parse_dir, self.source_dir, src_files=set(map(str, self.files)))
 
-    def get_cpg(self, file):
-        nodes_data, edges_data = read_graph(self.parse_dir, file)
-        return to_graph(nodes_data, edges_data)
+def get_cpg(parse_dir, file):
+    nodes_data, edges_data = read_graph(parse_dir, file)
+    return to_graph(nodes_data, edges_data)
