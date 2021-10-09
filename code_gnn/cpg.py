@@ -15,7 +15,7 @@ class CPG:
         print(query, ':', json.dumps(result, indent=2))
         return result
 
-    def parse(self, file):
+    def get_cpg(self, file):
         filepath = str(file.parent).replace("\\", "/")
         self.run_query(f'importCode.c("/share/{filepath}")')
         self.run_query(f'run.ossdataflow')
