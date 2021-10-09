@@ -1,12 +1,14 @@
 import torch
 from torch import nn
 from torch.nn import Linear, BatchNorm1d, functional as F, Sequential, ReLU
+
 from torch_geometric.datasets import TUDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.nn import GINConv, JumpingKnowledge, global_add_pool
+from torch_geometric.nn import GINConv, JumpingKnowledge, global_add_pool, GINEConv, GatedGraphConv, MessagePassing, \
+    HeteroConv
 
 
-class MyGIN(nn.Module):
+class GIN(nn.Module):
     """
     Adapted from pytorch_geometric/benchmark/kernel/gin.py
 
@@ -17,9 +19,9 @@ class MyGIN(nn.Module):
     def __init__(self, dataset, num_layers, hidden_features):
         super().__init__()
         self.convs = torch.nn.ModuleList()
-        self.convs.append(GINConv(MyGIN.MLP(dataset.num_node_features, hidden_features), train_eps=True))
+        self.convs.append(GINConv(GIN.MLP(dataset.num_node_features, hidden_features), train_eps=True))
         for i in range(num_layers-1):
-            self.convs.append(GINConv(MyGIN.MLP(hidden_features, hidden_features), train_eps=True))
+            self.convs.append(GINConv(GIN.MLP(hidden_features, hidden_features), train_eps=True))
         self.jump = JumpingKnowledge('cat')
         self.lin1 = Linear(num_layers * hidden_features, hidden_features)
         self.lin2 = Linear(hidden_features, dataset.num_classes)
@@ -40,6 +42,62 @@ class MyGIN(nn.Module):
             xs.append(x)
         x = self.jump(xs)  # JumpingKnowledge('cat') just concatenates node features from all layers
         x = global_add_pool(x, batch)  # Readout from each graph in the batch
+        x = self.lin1(x)
+        x = self.bn(x)
+        x = F.relu(x)
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.lin2(x)
+        return F.log_softmax(x, dim=-1)
+
+    @staticmethod
+    def MLP(in_features, hidden):
+        return Sequential(
+            Linear(in_features, hidden),
+            BatchNorm1d(hidden),
+            ReLU(),
+            Linear(hidden, hidden),
+            ReLU(),
+        )
+
+
+class HeteroGIN(nn.Module):
+    """
+    Adapted from pytorch_geometric/benchmark/kernel/gin.py
+
+    pyg implements the node embeddings in GINConv but the readout is pretty customizable, so it's in this module.
+    The basic version in basic_gnn.py does not handle minibatches, so I adapted this implementation instead.
+    The benchmark version uses mean pooling though the paper uses sum pooling, so I replaced it.
+    """
+    def __init__(self, dataset, num_layers, hidden_features, edge_types):
+        super().__init__()
+        self.convs = torch.nn.ModuleList()
+        self.convs.append(HeteroConv({
+            t: GINConv(GIN.MLP(dataset.num_node_features, hidden_features), train_eps=True) for t in edge_types
+        }))
+        for i in range(num_layers-1):
+            self.convs.append(HeteroConv({
+                t: GINConv(GIN.MLP(hidden_features, hidden_features), train_eps=True) for t in edge_types
+            }))
+        self.jump = JumpingKnowledge('cat')
+        self.lin1 = Linear(num_layers * hidden_features, hidden_features)
+        self.lin2 = Linear(hidden_features, dataset.num_classes)
+        self.bn = BatchNorm1d(hidden_features)
+
+    def reset_parameters(self):
+        for conv in self.convs:
+            conv.reset_parameters()
+        self.jump.reset_parameters()
+        self.lin1.reset_parameters()
+        self.lin2.reset_parameters()
+
+    def forward(self, data):
+        x_dict, edge_index_dict, batch_dict = data.x_dict, data.edge_index_dict, data.batch_dict
+        xs = []
+        for conv in self.convs:
+            x_dict = conv(x_dict, edge_index_dict)
+            xs.append(x_dict['node'])
+        x = self.jump(xs)  # JumpingKnowledge('cat') just concatenates node features from all layers
+        x = global_add_pool(x, batch_dict['node'])  # Readout from each graph in the batch
         x = self.lin1(x)
         x = self.bn(x)
         x = F.relu(x)

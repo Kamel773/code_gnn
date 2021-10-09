@@ -14,7 +14,7 @@ def measure_performance(model, device, test_loader, loss_fn):
         losses = []
         for data in test_loader:
             data = data.to(device)
-            label = data.y.to(device)
+            label = data['node'].y.to(device)
             out = model(data)
             loss = loss_fn(out, label.view(-1))
             losses.append(loss.item() * len(out))
@@ -48,7 +48,7 @@ def train(dataset, model, device, tensorboard_writer):
             optimizer.zero_grad()
             data = data.to(device)
             out = model(data)
-            loss = loss_fn(out, data.y.view(-1))
+            loss = loss_fn(out, data['node'].y.view(-1))
             loss.backward()
             epoch_loss += loss.item() * data.num_graphs
             optimizer.step()
