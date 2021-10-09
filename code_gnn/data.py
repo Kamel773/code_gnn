@@ -2,7 +2,9 @@ import copy
 import itertools
 import json
 import os
+import shutil
 import traceback
+from collections import defaultdict
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -14,7 +16,7 @@ from torch_geometric.utils import to_networkx
 import tqdm
 
 from cpg import CPG
-from old_cpg import parse, parse_with_tmp
+from cpg import parse, parse_with_tmp, CachedCPG
 from embeddings import CodeBERTEmbeddingGetter, Word2VecEmbeddingGetter, RandomEmbeddingGetter
 from google_drive_downloader import GoogleDriveDownloader as gdd
 
@@ -121,74 +123,116 @@ class MyCodeDataset(InMemoryDataset):
         ret = []
         for file_name in self.file_names:
             ret.append(file_name)
+            ret.append(self.get_files_path(file_name).name)
+            ret.append(self.get_parsed_path(file_name).name)
+            ret.append(self.get_metadata_path(file_name).name)
         return ret
 
     def get_files_path(self, path):
         path = Path(path)
         return path.parent / ('files_' + path.name)
 
+    def get_parsed_path(self, path):
+        path = Path(path)
+        return path.parent / ('parsed_' + path.name)
+
     def get_metadata_path(self, path):
         path = Path(path)
         return path.parent / ('metadata_' + path.name)
 
     def download(self):
-        for link, path in zip(self.download_links, self.raw_paths):
-            path = Path(path)
-            if not path.exists():
+        for link, raw_path in zip(self.download_links, self.raw_paths):
+            raw_path = Path(raw_path)
+            if not raw_path.exists():
                 gdd.download_file_from_google_drive(file_id=link,
-                                                    dest_path=str(path),
+                                                    dest_path=str(raw_path),
                                                     showsize=True)
 
-            with open(path) as f:
+            with open(raw_path) as f:
                 data = json.load(f)
             for d in data:
                 # NOTE: Adding this attribute for convenience, but it will not be persisted
                 d["file_name"] = '_'.join(map(str, (d["project"], d["commit_id"], d["target"]))) + '.c'
-
-            dst_dir = self.get_files_path(path)
-            dst_dir.mkdir(exist_ok=True)
+            data = list(sorted(data, key=lambda d: d["file_name"]))
+            idx = 0
             for d in data:
-                file_dst_dir = dst_dir / d["file_name"]
-                file_dst_dir.mkdir(exist_ok=True)  # TODO: There might be an accidental double write bug
-                file_path = file_dst_dir / d["file_name"]
-                with open(file_path, 'w') as f:
-                    # TODO: Possibly collapse whitespaces
-                    f.write(d["func"])
+                d["file_name"] = f'{idx}_{d["file_name"]}'
+                idx += 1
 
-            metadata = copy.deepcopy(data)
-            for d in metadata:
-                del d["func"]
-            metadata_path = self.get_metadata_path(path)
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f)
+            metadata_path = self.get_metadata_path(raw_path)
+            if not metadata_path.exists():
+                metadata = copy.deepcopy(data)
+                for d in metadata:
+                    del d["func"]
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f)
+
+            source_dir = self.get_files_path(raw_path)
+            if not source_dir.exists():
+                source_dir.mkdir()
+                try:
+                    for d in data:
+                        file_path = source_dir / d["file_name"]
+                        with open(file_path, 'w') as f:
+                            # TODO: Possibly collapse whitespaces
+                            f.write(d["func"])
+                except Exception:
+                    shutil.rmtree(source_dir)
+                    raise
+
+            parsed_path = self.get_parsed_path(raw_path)
+            if not parsed_path.exists():
+                try:
+                    parser = CachedCPG(source_dir, parsed_path, [source_dir / d["file_name"] for d in data])
+                    parser.pre_parse()
+                except Exception:
+                    shutil.rmtree(parsed_path)
+                    raise
 
     def process(self):
         # Read data into huge `Data` list.
         data_list = []
-        for raw_path in self.raw_paths:
+        for raw_file_name in self.file_names:
+            raw_path = Path(self.raw_dir) / raw_file_name
+            source_dir = self.get_files_path(raw_path)
             with open(self.get_metadata_path(raw_path)) as f:
                 data = json.load(f)
-            source_dir = self.get_files_path(raw_path)
-            code_files = [source_dir / d["file_name"] / d["file_name"] for d in data]
+
+            code_files = [source_dir / d["file_name"] for d in data]
             labels = [d["target"] for d in data]
 
-            parser = CPG()
+            parser = CachedCPG(source_dir, self.get_parsed_path(raw_path), code_files)
 
             input_data = list(zip(code_files, labels))
-            input_data = input_data[:100]
-            for file, label in tqdm.tqdm(input_data, desc=raw_path, total=len(input_data)):
-                # with open(file) as f:
-                #     code = f.read()
-                data = self.process_one(file, label, parser)
-                if data is not None:
-                    data_list.append(data)
+            assert len(input_data) > 0, f'No input data from {raw_file_name}'
+            errored_files = defaultdict(list)
+            with tqdm.tqdm(input_data, desc=raw_file_name) as pbar:
+                for file, label in pbar:
+                    try:
+                        cpg = parser.get_cpg(file)
 
-            # input_data = list(zip(code_files, labels, [self.embedding_getter] * len(code_files)))
-            # with Pool(self.workers) as pool:
-            #     for data in tqdm.tqdm(pool.imap_unordered(process_one, input_data, chunksize=10),
-            #                           desc=raw_path,
-            #                           total=len(input_data)):
-            #         data_list.append(data)
+                        # Get statement embedding
+                        node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+
+                        # Concatenate node type
+                        node_type = nx.get_node_attributes(cpg, 'type')
+                        type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
+                        node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+
+                        # TODO: Find and remove isolated nodes because of this filtering
+                        u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
+                        edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
+
+                        edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
+                        data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
+                    except AssertionError as e:
+                        errored_files[e].append(file)
+                    except Exception:
+                        pbar.write(traceback.format_exc())
+                    data_list.append(data)
+            for error_msg, files in errored_files:
+                print(f'Error "{error_msg}":')
+                print(files)
 
         self.data, self.slices = self.collate(data_list)
         torch.save((self.data, self.slices), self.processed_paths[0])
@@ -196,31 +240,6 @@ class MyCodeDataset(InMemoryDataset):
         data = data_list[0]
         print(data)
         return data_list
-
-    def process_one(self, file, label, parser):
-        try:
-            cpg = parser.parse(file)
-            # cpg = parse(file)
-            # cpg = parse_with_tmp(file)
-
-            # Get statement embedding
-            node_embeddings = self.embedding_getter.get_embedding(file, cpg)
-
-            # Concatenate node type
-            node_type = nx.get_node_attributes(cpg, 'type')
-            type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
-            node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
-
-            # TODO: Find and remove isolated nodes because of this filtering
-            u_idxs, v_idxs, edge_types = zip(*[e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF'])
-            edge_index = torch.tensor((u_idxs, v_idxs), dtype=torch.long)
-
-            edge_attr = torch.stack([torch.tensor([edge_type_map[edge_type]]) for edge_type in edge_types], dim=0)
-            data = Data(x=node_embeddings, edge_index=edge_index, edge_attr=edge_attr, y=torch.tensor([label]))
-            return data
-        except Exception:
-            traceback.print_exc()
-            return None
 
 
 def draw_9_plots(dataset):
