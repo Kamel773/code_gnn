@@ -99,49 +99,16 @@ def read_csv(filename):
         return rows
 
 
-def get_dfs(parsed_dir, filepath):
+def read_graph(parsed_dir, filepath):
     output_path = parsed_dir / str(filepath)
     assert output_path.exists(), output_path
     nodes_path = output_path / 'nodes.csv'
     edges_path = output_path / 'edges.csv'
     assert nodes_path.exists(), nodes_path
     assert edges_path.exists(), edges_path
-    nodes_df = read_csv(nodes_path)
-    edges_df = read_csv(edges_path)
-    return nodes_df, edges_df
-
-
-def parse(filepath):
-    if not isinstance(filepath, Path):
-        filepath = Path(filepath)
-    parsed_dir = filepath.parent.with_name('parsed_' + filepath.name)
-    if parsed_dir.exists():
-        shutil.rmtree(parsed_dir)
-    run_joern(parsed_dir, filepath.parent)
-    nodes_df, edges_df = get_dfs(parsed_dir, filepath)
-
-    return to_graph(nodes_df, edges_df)
-
-
-def parse_with_tmp(filepath):
-    if not isinstance(filepath, Path):
-        filepath = Path(filepath)
-    tmp_root = Path('./tmp')
-    if not tmp_root.exists():
-        tmp_root.mkdir(parents=True)
-    with tempfile.TemporaryDirectory(prefix=str(tmp_root.absolute()) + '/') as tmp_dir:
-        tmp_dir = Path(tmp_dir).relative_to(Path.cwd())
-        # Invoke joern
-        tmpfile_dir = tmp_dir / 'tmpfile'
-        tmpfile_dir.mkdir()
-        dst_filepath = tmpfile_dir / filepath.name
-        shutil.copyfile(filepath, dst_filepath)
-        joern_dir = tmp_dir / 'parsed'
-        run_joern(joern_dir, tmpfile_dir)
-
-        nodes_df, edges_df = get_dfs(joern_dir, dst_filepath)
-
-    return to_graph(nodes_df, edges_df)
+    nodes_data = read_csv(nodes_path)
+    edges_data = read_csv(edges_path)
+    return nodes_data, edges_data
 
 
 class CachedCPG:
@@ -155,16 +122,5 @@ class CachedCPG:
         run_joern(self.parse_dir, self.source_dir, src_files=set(map(str, self.files)))
 
     def get_cpg(self, file):
-        nodes_df, edges_df = get_dfs(self.parse_dir, file)
-        return to_graph(nodes_df, edges_df)
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('code', help='Name of code file')
-    args = parser.parse_args()
-    code = Path(args.code)
-    assert code.exists()
-    cpg = parse(code)
-    graphviz_cpg = nx.nx_pydot.to_pydot(cpg)
-    print(graphviz_cpg)
+        nodes_data, edges_data = read_graph(self.parse_dir, file)
+        return to_graph(nodes_data, edges_data)
