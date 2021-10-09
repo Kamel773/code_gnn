@@ -57,6 +57,8 @@ def run_joern(joern_dir, src_dir, src_files=None):
 def to_graph(nodes_df, edges_df):
     cpg = nx.MultiDiGraph()
     nodes_attributes = nodes_df
+    assert nodes_attributes[0]["type"] == 'File'
+    key_offset = int(nodes_attributes[0]["key"])
     for na in nodes_attributes:
         na.update({"label": f'{na["key"]} ({na["type"]}): {na["code"]}'})  # Graphviz label
         # Cover fault in Joern exposed by tests/acceptance/loop_exchange/chrome_debian/18159_0.c
@@ -64,7 +66,7 @@ def to_graph(nodes_df, edges_df):
             line, col, offset, end_offset = (int(x) for x in na["location"].split(':'))
             if na["type"] == 'CompoundStatement':
                 na["location"] = ':'.join(str(o) for o in (line, col, offset, end_offset))
-    nodes = list(zip([int(x["key"])-1 for x in nodes_attributes], nodes_attributes))
+    nodes = list(zip([int(x["key"])-key_offset for x in nodes_attributes], nodes_attributes))
     assert len(nodes) > 0, 'No nodes'
     cpg.add_nodes_from(nodes)
 
@@ -74,7 +76,7 @@ def to_graph(nodes_df, edges_df):
     edge_type_idx = {et: i for i, et in enumerate(unique_edge_types)}
     for ea in edges_attributes:
         ea.update({"label": f'({ea["type"]}): {ea["var"]}', "color": edge_type_idx[ea["type"]], "colorscheme": "pastel28"})  # Graphviz label
-    edges = [(int(x["start"])-1, int(x["end"])-1, x) for x in edges_attributes]
+    edges = [(int(x["start"])-key_offset, int(x["end"])-key_offset, x) for x in edges_attributes]
     assert len(edges) > 0, 'No edges'
     cpg.add_edges_from(edges)
 
