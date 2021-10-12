@@ -1,26 +1,17 @@
-import copy
-import dataclasses
-import itertools
 import json
 import os
-import re
-import shutil
 from collections import defaultdict
 from pathlib import Path
 
+import dgl
 import networkx as nx
-from matplotlib import pyplot as plt
-from torch_geometric.data import HeteroData
-from torch_geometric.utils import to_networkx
-from typing import List, Tuple, Dict
+import torch
+import tqdm
+from dgl import save_graphs, load_graphs
+from google_drive_downloader import GoogleDriveDownloader as gdd
 
 from cpg import get_cpg, parse_all
 from embeddings import CodeBERTEmbeddingGetter, Word2VecEmbeddingGetter, RandomEmbeddingGetter
-from google_drive_downloader import GoogleDriveDownloader as gdd
-
-import torch
-from torch_geometric.data import InMemoryDataset
-from typing import Callable
 
 # Source: https://github.com/VulDetProject/ReVeal/blob/ca31b783384b4cdb09b69950e48f79fa0748ef1d/data_processing/create_ggnn_data.py#L225-L257
 node_type_map = {
@@ -56,83 +47,37 @@ edge_type_map = {
     'IS_FUNCTION_OF_AST': 11,
     'IS_FUNCTION_OF_CFG': 12
 }
+all_edge_types = edge_type_map.keys()
 
+from dgl.data import DGLDataset
 
-def bigvuln_dict_to_list(data, *args):
-    data = list(data.values())
-    for d in data:
-        del d["Summary"]
-        del d["func_after"]
-        del d["patch"]
-        del d["vul_func_with_fix"]
-        d["commit_id"] = re.split(r'[^a-zA-Z0-9]', d["commit_id"])[0]
-    return data
+class MyDGLDataset(DGLDataset):
+    """ Template for customizing graph datasets in DGL.
 
-
-def add_reveal_label(data, raw_code_file):
-    label = 1 if raw_code_file == 'vulnerables.json' else 0
-    for d in data:
-        d["label"] = label
-    return data
-
-
-def noop(data, *args):
-    return data
-
-
-@dataclasses.dataclass
-class CodeDatasetConfig:
-    download_links: List[Tuple[str, str]]
-    file_names: List[str]
-    label_tag: str
-    code_tag: str
-    file_name_hash_fields: List[str]
-    transform: Callable[[List[Dict]], List[Dict]] = noop
-    unzip: bool = False
-
-    def __post_init__(self):
-        if isinstance(self.label_tag, list):
-            assert len(self.file_names) == len(self.label_tag), f'{len(self.file_names)=} should equal {len(self.label_tag)=}'
-
-    def file_name_hash(self, data):
-        return '_'.join(map(str, (data[field] for field in self.file_name_hash_fields))) + '.c'
-
-
-class MyCodeDataset(InMemoryDataset):
-    configs = {
-        # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
-        "devign": CodeDatasetConfig(
-            download_links=[('1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF', 'function.json')],
-            file_names=['function.json'],
-            code_tag='func',
-            label_tag='target',
-            file_name_hash_fields=["project", "commit_id", "target"],
-        ),
-        # https://github.com/vulnerabilitydetection/VulnerabilityDetectionResearch
-        "reveal": CodeDatasetConfig(
-            download_links=[
-                ('1NPtliGlRpR0CxKIUW4ah2EUggKTHnM71', 'non-vulnerables.json'),
-                ('1I6N0Kxv5gmNzi12tpX8OZWQo7Z4w8Unz', 'vulnerables.json'),
-            ],
-            file_names=['vulnerables.json', 'non-vulnerables.json'],
-            code_tag='code',
-            label_tag='label',
-            file_name_hash_fields=["project", "hash", 'label'],
-            transform=add_reveal_label,
-        ),
-        # https://github.com/ZeoVan/MSR_20_Code_vulnerability_CSV_Dataset
-        "big-vuln": CodeDatasetConfig(
-            download_links=[('1deNsPfeh77h1SHjJURYOeyCR96JgxB_A', 'MSR_data_cleaned_json.zip')],
-            file_names=['MSR_data_cleaned.json'],
-            label_tag='vul',
-            code_tag='func_before',
-            file_name_hash_fields=['project', 'commit_id', 'vul'],
-            transform=bigvuln_dict_to_list,
-            unzip=True,
-        )
-    }
-
-    def __init__(self, root, name, transform=None, pre_transform=None, embed_type=None, workers=8):
+    Parameters
+    ----------
+    url : str
+        URL to download the raw dataset
+    raw_dir : str
+        Specifying the directory that will store the
+        downloaded data or the directory that
+        already stores the input data.
+        Default: ~/.dgl/
+    save_dir : str
+        Directory to save the processed dataset.
+        Default: the value of `raw_dir`
+    force_reload : bool
+        Whether to reload the dataset. Default: False
+    verbose : bool
+        Whether to print out progress information
+    """
+    def __init__(self,
+                 embed_type,
+                 url=None,
+                 raw_dir=None,
+                 save_dir=None,
+                 force_reload=False,
+                 verbose=False):
         if embed_type == 'codebert':
             self.embedding_getter = CodeBERTEmbeddingGetter()
         elif embed_type == 'word2vec':
@@ -141,214 +86,119 @@ class MyCodeDataset(InMemoryDataset):
             self.embedding_getter = RandomEmbeddingGetter()
         else:
             raise NotImplementedError('Embedding type ' + embed_type)
-        self.name = name
-        self.embed_type = embed_type
-
-        self.config = self.__class__.configs[name]
-        self.workers = workers
-
-        root = os.path.join(root, self.__class__.__name__)
-        super().__init__(root, transform, pre_transform)
-
-        self.data, self.slices = torch.load(self.processed_paths[0])
-
-    @property
-    def processed_dir(self) -> str:
-        return os.path.join(self.root, self.name, self.embed_type)
-
-    @property
-    def processed_file_names(self):
-        ret = []
-        for raw_path in self.raw_paths:
-            ret.append(self.get_processed_path(raw_path).name)
-        return ret
-
-    @property
-    def raw_dir(self) -> str:
-        return os.path.join(self.root, self.name, 'raw')
-
-    @property
-    def raw_file_names(self):
-        ret = self.raw_source_file_paths
-        for raw_path in self.raw_source_file_paths:
-            ret.append(self.get_files_path(raw_path).name)
-            ret.append(self.get_parsed_path(raw_path).name)
-            ret.append(self.get_metadata_path(raw_path).name)
-        return ret
-
-    @property
-    def raw_source_file_paths(self):
-        ret = []
-        for file_name in self.config.file_names:
-            ret.append(Path(self.raw_dir) / file_name)
-        return ret
-
-    def get_processed_path(self, path):
-        path = Path(path)
-        return path.parent / ('processed_' + path.name + '.pt')
-
-    def get_files_path(self, path):
-        path = Path(path)
-        return path.parent / ('files_' + path.name)
-
-    def get_parsed_path(self, path):
-        path = Path(path)
-        return path.parent / ('parsed_' + path.name)
-
-    def get_metadata_path(self, path):
-        path = Path(path)
-        return path.parent / ('metadata_' + path.name)
+        self.labels = None
+        self.graphs = None
+        super(MyDGLDataset, self).__init__(name='devign',
+                                           url=url,
+                                           raw_dir=raw_dir,
+                                           save_dir=save_dir,
+                                           force_reload=force_reload,
+                                           verbose=verbose)
 
     def download(self):
-        for link, dst_file in self.config.download_links:
-            dst_file = Path(self.raw_dir, dst_file)
-            if not dst_file.exists():
-                gdd.download_file_from_google_drive(file_id=link,
-                                                    dest_path=str(dst_file),
-                                                    showsize=True,
-                                                    unzip=self.config.unzip)
-        for i, raw_path in enumerate(self.raw_source_file_paths):
-            # Preprocess raw file
-            raw_path = Path(raw_path)
-            with open(raw_path) as f:
-                data = json.load(f)
-            data = self.config.transform(data, raw_path.name)
-            for d in data:
-                # NOTE: Adding this attribute for convenience, but it will not be persisted
-                d["file_name"] = self.config.file_name_hash(d)
-            data = list(sorted(data, key=lambda x: x["file_name"]))
-            idx = 0
-            for d in data:
-                d["file_name"] = f'{idx}_{d["file_name"]}'
-                idx += 1
-
-            metadata_path = self.get_metadata_path(raw_path)
-            if not metadata_path.exists():
-                metadata = copy.deepcopy(data)
-                for d in metadata:
-                    del d[self.config.code_tag]
-                with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f)
-
-            source_dir = self.get_files_path(raw_path)
-            if not source_dir.exists():
-                source_dir.mkdir()
-                try:
-                    for d in data:
-                        file_path = source_dir / d["file_name"]
-                        try:
-                            with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
-                                # TODO: Possibly collapse whitespaces
-                                f.write(d[self.config.code_tag])
-                        except OSError as e:
-                            print('Error writing file', file_path, e)
-                            open(file_path, 'a').close()
-                except Exception:
-                    shutil.rmtree(source_dir)
-                    raise
-
-            parsed_path = self.get_parsed_path(raw_path)
-            if not parsed_path.exists():
-                try:
-                    parse_all(source_dir, parsed_path, [source_dir / d["file_name"] for d in data])
-                except Exception:
-                    shutil.rmtree(parsed_path)
-                    raise
-
+        # download raw data to local disk
+        os.makedirs(self.raw_path, exist_ok=True)
+        gdd.download_file_from_google_drive(file_id='1x6hoF7G-tSYxg8AFybggypLZgMGDNHfF',
+                                            dest_path=os.path.join(self.raw_path, 'function.json'),
+                                            showsize=True)
 
     def process(self):
-        # Read data into huge `Data` list.
-        data_list = []
-        for i, raw_path in enumerate(self.raw_source_file_paths):
-            raw_path = Path(raw_path)
+        with open(os.path.join(self.raw_path, 'function.json')) as f:
+            raw_datas = json.load(f)
 
-            # Preprocess each source file
-            processed_path = Path(self.processed_dir) / self.get_processed_path(raw_path).name
-            if not processed_path.exists():
-                source_dir = self.get_files_path(raw_path)
-                with open(self.get_metadata_path(raw_path)) as f:
-                    data = json.load(f)
+        # Generate names for files and sort them by name
+        for d in raw_datas:
+            # NOTE: Adding this attribute for convenience, but it will not be persisted
+            d["file_name"] = '_'.join(map(str, [d[field] for field in ["project", "commit_id", "target"]])) + '.c'
+        raw_datas = list(sorted(raw_datas, key=lambda x: x["file_name"]))
+        idx = 0
+        for d in raw_datas:
+            d["file_name"] = f'{idx}_{d["file_name"]}'
+            idx += 1
 
-                code_files = [source_dir / d["file_name"] for d in data]
-                labels = [int(d[self.config.label_tag]) for d in data]
+        # Write source files
+        source_dir = Path(self.save_path) / 'files'
+        if not source_dir.exists():
+            os.makedirs(source_dir, exist_ok=True)
+            for d in raw_datas:
+                file_path = os.path.join(source_dir, d["file_name"])
+                code = d["func"]
+                try:
+                    with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
+                        # TODO: Possibly collapse whitespaces
+                        f.write(code)
+                except OSError as e:
+                    print('Error writing file', file_path, e)
+                    open(file_path, 'a').close()
 
-                parse_dir = self.get_parsed_path(raw_path)
+        # Parse all files at once
+        parsed_dir = Path(self.save_path) / 'parsed'
+        if not parsed_dir.exists():
+            parse_all(parsed_dir, source_dir, [str(source_dir / d["file_name"]) for d in raw_datas])
 
-                input_data = list(zip(code_files, labels))
-                assert len(input_data) > 0, f'No input data from {raw_path}'
-                for file, label in input_data:
-                    try:
-                        cpg = get_cpg(parse_dir, file)
-                    except AssertionError as e:
-                        # pbar.write(f'Error parsing {file}: {e}')
-                        print(f'Error parsing {file}: {e}')
-                        continue
-                    # Make data
-                    data = HeteroData()
+        self.labels = torch.tensor([int(d["target"]) for d in raw_datas])
 
-                    # Get statement embedding
-                    node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+        # Preprocess each source file
+        graphs = []
+        with tqdm.tqdm(raw_datas) as pbar:
+            for raw_data in pbar:
+                file = os.path.join(source_dir, raw_data["file_name"])
+                try:
+                    cpg = get_cpg(parsed_dir, file)
+                except AssertionError as e:
+                    # pbar.write(f'Error parsing {file}: {e}')
+                    pbar.write(f'Error parsing {file}: {e}')
+                    continue
 
-                    # Concatenate node type
-                    node_type = nx.get_node_attributes(cpg, 'type')
-                    type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
-                    node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
-                    node_tag = 'node'
-                    data[node_tag].x = node_embeddings
+                node_tag = 'node'
+                graph_data = {}
+                edge_idx_by_type = defaultdict(list)
+                # TODO: Find and remove isolated nodes because of this filtering
+                edge_idx = [e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF']
+                for u, v, edge_type in edge_idx:
+                    edge_idx_by_type[edge_type].append((u, v))
+                edge_idx_by_type = dict(edge_idx_by_type)
+                for edge_type, edge_idx in edge_idx_by_type.items():
+                    us, vs = zip(*edge_idx)
+                    graph_data[(node_tag, edge_type, node_tag)] = (torch.tensor(us), torch.tensor(vs))
 
-                    edge_idx_by_type = defaultdict(list)
-                    # TODO: Find and remove isolated nodes because of this filtering
-                    edge_idx = [e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF']
-                    for u, v, t in edge_idx:
-                        edge_idx_by_type[t].append((u, v))
-                    edge_idx_by_type = dict(edge_idx_by_type)
-                    for t in edge_idx_by_type:
-                        data[node_tag, t, node_tag].edge_index = torch.tensor(edge_idx_by_type[t]).t()
+                # We need to add all the edge types that will be present in any graph to the graph
+                # See https://github.com/dmlc/dgl/blob/master/python/dgl/batch.py#L35-L37
+                present_etypes = set(ctype[1] for ctype in graph_data.keys())
+                for missing_edge_type in all_edge_types - present_etypes:
+                    graph_data[(node_tag, missing_edge_type, node_tag)] = []
+                g = dgl.heterograph(graph_data)
 
-                    data[node_tag].y = torch.tensor([label])
-                    data_list.append(data)
+                # Get statement embedding
+                node_embeddings = self.embedding_getter.get_embedding(file, cpg)
+                # Concatenate node type
+                node_type = nx.get_node_attributes(cpg, 'type')
+                type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
+                node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
+                g.nodes[node_tag].data['h'] = node_embeddings
 
-                self.data, self.slices = self.collate(data_list)
-                torch.save((self.data, self.slices), processed_path)
+                graphs.append(g)
+        self.graphs = graphs
 
-                data = data_list[0]
-                print(data)
+    def __getitem__(self, idx):
+        # get one example by index
+        return self.graphs[idx], self.labels[idx]
 
-    @property
-    def num_node_features(self) -> int:
-        data = self[0]
-        if isinstance(data, HeteroData):
-            return data['node'].num_features
-        else:
-            return super().num_node_features
+    def __len__(self):
+        # number of data examples
+        return len(self.graphs)
 
-    @property
-    def num_classes(self) -> int:
-        data = self[0]
-        if isinstance(data, HeteroData):
-            y = self.data['node'].y
-            if y is None:
-                return 0
-            elif y.numel() == y.size(0) and not torch.is_floating_point(y):
-                return int(y.max()) + 1
-            elif y.numel() == y.size(0) and torch.is_floating_point(y):
-                return torch.unique(y).numel()
-            else:
-                return y.size(-1)
-        else:
-            return super().num_node_features
+    def save(self):
+        # save processed data to directory `self.save_path`
+        graph_path = os.path.join(self.save_path, 'dgl_data.bin')
+        save_graphs(graph_path, self.graphs, {'labels': self.labels})
 
+    def load(self):
+        # load processed data from directory `self.save_path`
+        graph_path = os.path.join(self.save_path, 'dgl_data.bin')
+        self.graphs, label_dict = load_graphs(graph_path)
+        self.labels = label_dict['labels']
 
-def draw_9_plots(dataset):
-    """Draw plots of graphs from the PROTEINS dataset."""
-    fig, axes = plt.subplots(nrows=3, ncols=3)
-    ax = axes.flatten()
-    dataset_sample = list(itertools.islice((d for d in dataset if d.y[0].item() == 0), 4)) + list(
-        itertools.islice((d for d in dataset if d.y[0].item() == 1), 5))
-    for i in range(3*3):
-        data = dataset_sample[i]
-        nx.draw_networkx(to_networkx(data, to_undirected=True), with_labels=False, ax=ax[i], node_size=10, node_color=torch.argmax(data.x, dim=1), cmap='Set1')
-        ax[i].set_axis_off()
-        ax[i].set_title(f'Enzyme: {data.y[0].item()}')
-    fig.suptitle('9 proteins')
-    plt.show()
+    def has_cache(self):
+        # check whether there are processed data in `self.save_path`
+        return os.path.exists(self.save_path)
