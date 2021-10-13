@@ -17,17 +17,14 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = MyDGLDataset(embed_type='word2vec', raw_dir='data', save_dir='data')
-
+    dataset = MyDGLDataset(embed_type='codebert', raw_dir='data', save_dir='data', verbose=True)
+    return
     device = torch.device('cuda')
 
     input_dim = 169
     graph_embed_size = 200
     num_steps = 8
-    etypes = set()
-    for g, l in dataset:
-        etypes.update(g.etypes)
-    model = DevignModel(input_dim=input_dim, output_dim=graph_embed_size, n_etypes=len(etypes), num_steps=num_steps).to(device)
+    model = DevignModel(input_dim=input_dim, output_dim=graph_embed_size, n_etypes=dataset.max_etypes, num_steps=num_steps).to(device)
     tb_dir = 'runs/' + '-'.join(str(s) for s in (dataset.name, type(model).__name__, input_dim, graph_embed_size, num_steps))
     if os.path.exists(tb_dir):
         shutil.rmtree(tb_dir)

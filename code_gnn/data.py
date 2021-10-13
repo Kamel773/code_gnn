@@ -78,6 +78,7 @@ class MyDGLDataset(DGLDataset):
                  save_dir=None,
                  force_reload=False,
                  verbose=False):
+        self.embed_type = embed_type
         if embed_type == 'codebert':
             self.embedding_getter = CodeBERTEmbeddingGetter()
         elif embed_type == 'word2vec':
@@ -136,49 +137,53 @@ class MyDGLDataset(DGLDataset):
         if not parsed_dir.exists():
             parse_all(parsed_dir, source_dir, [str(source_dir / d["file_name"]) for d in raw_datas])
 
-        self.labels = torch.tensor([int(d["target"]) for d in raw_datas])
-
         # Preprocess each source file
         graphs = []
+        labels = []
         with tqdm.tqdm(raw_datas) as pbar:
-            for raw_data in pbar:
+            for i, raw_data in enumerate(pbar):
                 file = os.path.join(source_dir, raw_data["file_name"])
                 try:
                     cpg = get_cpg(parsed_dir, file)
                 except AssertionError as e:
-                    # pbar.write(f'Error parsing {file}: {e}')
                     pbar.write(f'Error parsing {file}: {e}')
                     continue
 
-                node_tag = 'node'
-                graph_data = {}
-                edge_idx_by_type = defaultdict(list)
-                # TODO: Find and remove isolated nodes because of this filtering
-                edge_idx = [e for e in cpg.edges(data='type') if e[2] != 'IS_FILE_OF']
-                for u, v, edge_type in edge_idx:
-                    edge_idx_by_type[edge_type].append((u, v))
-                edge_idx_by_type = dict(edge_idx_by_type)
-                for edge_type, edge_idx in edge_idx_by_type.items():
-                    us, vs = zip(*edge_idx)
-                    graph_data[(node_tag, edge_type, node_tag)] = (torch.tensor(us), torch.tensor(vs))
+                # Filter out IS_FILE_OF attribute
+                edges_to_remove = [(u, v, k) for u, v, k, t in cpg.edges(keys=True, data='type') if t == 'IS_FILE_OF']
+                cpg.remove_edges_from(edges_to_remove)
+                cpg.remove_nodes_from(list(nx.isolates(cpg)))
+                offset = min(cpg.nodes())
+                # Relabel nodes starting from 0 because DGL will start node indices from 0
+                offset_mapping = {old_label: old_label - offset for old_label in cpg.nodes()}
+                cpg = nx.relabel_nodes(cpg, offset_mapping)
 
-                # We need to add all the edge types that will be present in any graph to the graph
-                # See https://github.com/dmlc/dgl/blob/master/python/dgl/batch.py#L35-L37
-                present_etypes = set(ctype[1] for ctype in graph_data.keys())
-                for missing_edge_type in all_edge_types - present_etypes:
-                    graph_data[(node_tag, missing_edge_type, node_tag)] = []
-                g = dgl.heterograph(graph_data)
+                # Remove graphs with more than 500 nodes for computational efficiency, as in the paper
+                if len(cpg.nodes) > 500:
+                    continue
 
-                # Get statement embedding
+                # Filter out IS_FILE_OF edges
+                us, vs, edge_types = zip(*cpg.edges(data='type'))
+                g = dgl.graph((us, vs))
+
+                # Edge feature is just the edge type
+                g.edata['etype'] = torch.tensor([edge_type_map[t] for t in edge_types])
+
+                # Get configurable statement embedding
+                # TODO: If we want to train the embedding network (CodeBERT) as well, then we need to instead store the
+                #  tokens of the code and instantiate the embedding with the computational graph connected to optimizer
                 node_embeddings = self.embedding_getter.get_embedding(file, cpg)
                 # Concatenate node type
                 node_type = nx.get_node_attributes(cpg, 'type')
                 type_embeddings = torch.stack([type_one_hot[node_type_map[node_type[node]] - 1] for node in cpg.nodes])
                 node_embeddings = torch.cat((type_embeddings, node_embeddings), dim=1)
-                g.nodes[node_tag].data['h'] = node_embeddings
+                g.ndata['h'] = node_embeddings
 
                 graphs.append(g)
+                labels.append(int(raw_data["target"]))
+
         self.graphs = graphs
+        self.labels = torch.tensor(labels)
 
     def __getitem__(self, idx):
         # get one example by index
@@ -188,17 +193,23 @@ class MyDGLDataset(DGLDataset):
         # number of data examples
         return len(self.graphs)
 
+    @property
+    def processed_file(self):
+        return os.path.join(self.save_path, f'dgl_data_{self.embed_type}.bin')
+
+    @property
+    def max_etypes(self):
+        return max(max(g.edata['etype']) for g in self.graphs)+1
+
     def save(self):
         # save processed data to directory `self.save_path`
-        graph_path = os.path.join(self.save_path, 'dgl_data.bin')
-        save_graphs(graph_path, self.graphs, {'labels': self.labels})
+        save_graphs(self.processed_file, self.graphs, {'labels': self.labels})
 
     def load(self):
         # load processed data from directory `self.save_path`
-        graph_path = os.path.join(self.save_path, 'dgl_data.bin')
-        self.graphs, label_dict = load_graphs(graph_path)
+        self.graphs, label_dict = load_graphs(self.processed_file)
         self.labels = label_dict['labels']
 
     def has_cache(self):
         # check whether there are processed data in `self.save_path`
-        return os.path.exists(self.save_path)
+        return os.path.exists(self.processed_file)

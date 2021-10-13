@@ -38,11 +38,23 @@ class DevignModel(nn.Module):
         self.mlp_z.reset_parameters()
         self.mlp_y.reset_parameters()
 
+    def stack_pad_zeros(self, graph_features):
+        features = []
+        max_length = max(len(g) for g in graph_features)
+        for feature in graph_features:
+            pad_dim = max_length - len(feature)
+            # feature = F.pad(feature, (0, pad_dim) + (0, 0) * (len(feature.shape)-1))
+            feature = torch.cat(
+                (feature, torch.zeros(size=(pad_dim, *(feature.shape[1:])), requires_grad=feature.requires_grad, device=feature.device)), dim=0)
+            features.append(feature)
+        return torch.stack(features, dim=0)
+
     def forward(self, batch):
-        batch.ndata['m'] = self.ggnn(batch, batch.ndata['h'], batch.edata['dgl.ETYPE'])
-        graphs, _ = dgl.unbatch(batch, batch.batch_num_nodes(), batch.batch_num_edges())
-        h_i = graphs.ndata['m']
-        c_i = torch.cat((h_i, graphs.ndata['h']), dim=-1)
+        batch.ndata['h_next'] = self.ggnn(batch, batch.ndata['h'], batch.edata['etype'])
+        graphs = dgl.unbatch(batch, batch.batch_num_nodes(), batch.batch_num_edges())
+        features = self.stack_pad_zeros([g.ndata['h'] for g in graphs])
+        h_i = self.stack_pad_zeros([g.ndata['h_next'] for g in graphs])
+        c_i = torch.cat((h_i, features), dim=-1)
         Y_1 = self.maxpool1(
             F.relu(
                 self.conv_l1(h_i.transpose(1, 2))
