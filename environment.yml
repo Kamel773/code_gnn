@@ -5,8 +5,10 @@ channels:
   - torch
   - conda-forge
   - defaults
+  - dglteam
 dependencies:
   - cudatoolkit=10.2.89
+  - dgl-cuda10.2=0.7.1
   - gensim=4.1.2
   - jupyter=1.0.0
   - networkx=2.6.3
@@ -21,5 +23,6 @@ dependencies:
   - torchaudio=0.9.1
   - torchvision=0.2.2
   - tqdm=4.62.3
+  - transformers=4.11.2
   - pip:
     - cpgqls-client==0.0.9
