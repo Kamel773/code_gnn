@@ -125,7 +125,7 @@ class MyDGLDataset(DGLDataset):
                 file_path = os.path.join(source_dir, d["file_name"])
                 code = d["func"]
                 try:
-                    with open(file_path, 'w', encoding='utf-8', errors='ignore') as f:
+                    with open(file_path, 'w', encoding='utf-8', newline='', errors='ignore') as f:
                         # TODO: Possibly collapse whitespaces
                         f.write(code)
                 except OSError as e:
