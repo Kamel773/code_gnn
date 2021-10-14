@@ -21,6 +21,8 @@ class CodeBERTEmbeddingGetter(EmbeddingGetter):
     def get_embedding(self, file, cpg):
         # TODO: standardize the text whitespace so that there is just one space in between each token.
         #  Do the same for cpg so that the offsets match.
+
+        # TODO: Handle sentences larger than the model's max sentence size.
         with open(file) as f:
             text = f.read()
         examples = [
@@ -47,6 +49,11 @@ class CodeBERTEmbeddingGetter(EmbeddingGetter):
                 absolute_t_begin_i = None
                 absolute_t_end_i = None
                 for t_i, (t_begin, t_end) in enumerate(offsets):
+                    # todo: revisit bounds. There are spaces before each codebert token,
+                    #  so it might make sense to offset by 1 and keep a precise condition.
+                    #  as well, offsets in codebert tokenizer are end-inclusive (points to
+                    #  the index of the character after the last character), while the end
+                    #  of joern offsets is the index of the last character.
                     if n_begin >= t_begin:
                         absolute_t_begin_i = t_i
                     if n_end <= t_end:
