@@ -1,6 +1,8 @@
 # Temp files
 .idea
 .pytest_cache
+__pycache__
+*.pt
 
 # Outputs
 /tmp/
@@ -13,6 +15,10 @@
 /other/
 /joern/
 /old-joern/
+/SupContrast/
+/codepropertygraph/
 
 # Big files
 /data/
+
+/bfg.jar
