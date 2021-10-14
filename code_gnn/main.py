@@ -17,8 +17,7 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = MyDGLDataset(embed_type='codebert', raw_dir='data', save_dir='data', verbose=True)
-    return
+    dataset = MyDGLDataset(embed_type='word2vec', raw_dir='data', save_dir='data', verbose=True)
     device = torch.device('cuda')
 
     input_dim = 169
@@ -31,6 +30,8 @@ def main():
     tb = SummaryWriter(tb_dir)
 
     train(dataset, model, device, tb)
+
+    torch.save(model.state_dict(), 'model.pt')
 
 
 if __name__ == '__main__':

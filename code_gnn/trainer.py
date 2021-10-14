@@ -50,7 +50,7 @@ def train(dataset, model, device, tensorboard_writer):
     optimizer = Adam(model.parameters(), lr=0.01, weight_decay=0)
     scheduler = StepLR(optimizer, gamma=0.5, step_size=50)
     log_every = 25
-    for i in range(400):
+    for i in range(10):
         epoch_loss = 0
         # torch_geometric.loader.DataLoader concatenates all the graphs in the batch
         # into one big disjoint graph, so we can train with a batch as if it's a single graph.

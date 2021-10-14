@@ -16,3 +16,5 @@
 
 # Big files
 /data/
+/bfg.jar
+/model.pt
