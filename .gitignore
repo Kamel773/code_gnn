@@ -20,5 +20,7 @@ __pycache__
 
 # Big files
 /data/
+/word2vec/
+/save/
 
 /bfg.jar

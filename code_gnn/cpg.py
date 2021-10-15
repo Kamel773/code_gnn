@@ -18,7 +18,9 @@ jars = [
     Path("old-joern/projects/extensions/joern-fuzzyc/build/libs/joern-fuzzyc.jar"),
     Path('old-joern/projects/extensions/jpanlib/build/libs/jpanlib.jar'),
 ]
-jars += Path('old-joern/projects/octopus/lib').glob('*.jar')
+octopus_jars = list(Path('old-joern/projects/octopus/lib').glob('*.jar'))
+assert len(octopus_jars) > 0, 'no jars in old-joern/projects/octopus/lib'
+jars += octopus_jars
 sep = ';' if os.name == 'nt' else ':'
 jars_str = sep.join(str(j) for j in jars)
 
@@ -50,7 +52,8 @@ def run_joern(joern_dir, src_dir, src_files=None):
                 pbar.write(line)
             pbar.set_postfix(status)
     if proc.returncode != 0:
-        raise Exception(f'Error running command: {cmd}. Last output: {line}')
+        # raise Exception(f'Error running command: {cmd}. Last output: {line}')
+        print(f'Error running command: {cmd}. Last output: {line}')
     print('Done parsing', src_dir, 'to', joern_dir)
 
 

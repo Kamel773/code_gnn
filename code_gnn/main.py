@@ -17,13 +17,12 @@ def main():
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    dataset = MyDGLDataset(embed_type='codebert', raw_dir='data', save_dir='data', verbose=True)
-    return
+    dataset = MyDGLDataset(embed_type='word2vec', raw_dir='data', save_dir='data', verbose=True)
     device = torch.device('cuda')
 
-    input_dim = 169
+    input_dim = dataset[0][0].ndata['h'].shape[-1]
     graph_embed_size = 200
-    num_steps = 8
+    num_steps = 6
     model = DevignModel(input_dim=input_dim, output_dim=graph_embed_size, n_etypes=dataset.max_etypes, num_steps=num_steps).to(device)
     tb_dir = 'runs/' + '-'.join(str(s) for s in (dataset.name, type(model).__name__, input_dim, graph_embed_size, num_steps))
     if os.path.exists(tb_dir):
@@ -31,6 +30,8 @@ def main():
     tb = SummaryWriter(tb_dir)
 
     train(dataset, model, device, tb)
+
+    torch.save(model, 'model.pt')
 
 
 if __name__ == '__main__':

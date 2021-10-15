@@ -29,28 +29,26 @@ def measure_performance(model, device, test_loader, test_set, loss_fn):
 
 
 def train(dataset, model, device, tensorboard_writer):
-    n_train = int(len(dataset) * 0.9)
+    n_train = int(len(dataset) * 0.75)
     splits = [n_train, len(dataset) - n_train]
     print('Splits:', splits[0], 'train', splits[1], 'test')
-    train_set, valid_set, test_set = split_dataset(dataset, frac_list=[0.8, 0.1, 0.1], shuffle=False, random_state=0)
+    train_set, valid_set, test_set = split_dataset(dataset, frac_list=[0.75, 0., 0.25], shuffle=False, random_state=0)
     train_loader = GraphDataLoader(
         train_set,
         batch_size=64,
-        drop_last=False,
         shuffle=True
     )
     test_loader = GraphDataLoader(
         test_set,
         batch_size=64,
-        drop_last=False,
         shuffle=False
     )
     model.reset_parameters()
     loss_fn = BCELoss(reduction='sum')
-    optimizer = Adam(model.parameters(), lr=0.01, weight_decay=0)
-    scheduler = StepLR(optimizer, gamma=0.5, step_size=50)
+    optimizer = Adam(model.parameters(), lr=0.0001, weight_decay=0.01)
+    # scheduler = StepLR(optimizer, gamma=0.5, step_size=50)
     log_every = 25
-    for i in range(400):
+    for i in range(500):
         epoch_loss = 0
         # torch_geometric.loader.DataLoader concatenates all the graphs in the batch
         # into one big disjoint graph, so we can train with a batch as if it's a single graph.
@@ -77,4 +75,4 @@ def train(dataset, model, device, tensorboard_writer):
         tensorboard_writer.add_scalar('val_loss', test_loss, i)
         if i % log_every == 0:
             print('Epoch:', i, 'Train loss:', train_loss, 'Test Accuracy:', test_acc)
-        scheduler.step()
+        # scheduler.step()
